@@ -140,7 +140,7 @@ describe('the redaction survives the spawn, not just the function', () => {
 // CLAUDE.md bans - a test that reports PASSED while proving nothing.
 describe('the coverage probe does not leak credentials to repo-controlled code', () => {
   it.skipIf(!hasPython3())(
-    'a coverage.py planted at the repo root sees no credentials',
+    'a coverage.py planted at the repo root is never executed by the driver (A1)',
     async () => {
       const fs = await import('node:fs/promises');
       const os = await import('node:os');
@@ -184,15 +184,13 @@ describe('the coverage probe does not leak credentials to repo-controlled code',
       }
       await fs.rm(root, { recursive: true, force: true });
 
-      // The probe must actually have executed our planted module. Asserting this
-      // FIRST is what stops the three assertions below from passing vacuously.
-      expect(seen).toContain('REFACTRON_TOKEN=');
-
-      // Assert on the VALUES. Asserting on the names would match the `k + "="`
-      // label the probe writes for a redacted variable and pass either way.
-      expect(seen).not.toContain('sk_live_canary_probe');
-      expect(seen).not.toContain('ghp_canary_probe');
-      expect(seen).not.toContain('canary_probe_aws');
+      // A1 (GHSA-739m-x9gc-9wjv) makes this stronger than redaction: the coverage
+      // driver now loads the REAL coverage from site-packages, run from a NEUTRAL
+      // cwd, so a repo-root `coverage.py` is NEVER executed by any coverage spawn
+      // (probe, run, or json). The planted module cannot be hijacked at all, so it
+      // cannot see credentials — redacted or otherwise — because it never runs.
+      // Before the fix the `-m coverage` probe executed this file in the repo root.
+      expect(seen).toBe('');
     },
     120_000,
   );

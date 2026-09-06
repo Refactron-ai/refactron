@@ -704,14 +704,16 @@ describe('python-line-coverage reporter', () => {
           shim,
           '#!/bin/sh\n' +
             'case "$*" in\n' +
-            `  *"-m coverage --version"*) exit 0 ;;\n` +
+            // The site-packages resolve (ADR-17): print a plausible dir so the
+            // launcher can insert it.
+            `  *"os.path.dirname(os.path.dirname"*) echo /fake/site ; exit 0 ;;\n` +
             // Writes the data file too, so the run is observed as a SUCCESS
             // and not merely as "the shim was spawned". #99 requires that a
             // matching interpreter still MEASURES, not just that it is chosen.
-            `  *"-m coverage run"*) printf '%s' "$0" > ${marker};\n` +
+            `  *" run "*) printf '%s' "$0" > ${marker};\n` +
             `     for a in "$@"; do case "$a" in *.coverage) : > "$a" ;; esac; done\n` +
             `     exit 0 ;;\n` +
-            `  *"-m coverage json"*)\n` +
+            `  *" json "*)\n` +
             `     for a in "$@"; do case "$a" in *coverage.json) echo '{"files":{}}' > "$a" ;; esac; done\n` +
             `     exit 0 ;;\n` +
             '  *) exit 0 ;;\n' +
@@ -750,28 +752,28 @@ describe('python-line-coverage reporter', () => {
         const bin = path.join(root, 'bin');
         await fs.mkdir(bin);
 
-        // A python that exists but cannot run coverage.
+        // A python that exists but cannot import coverage (the resolve fails).
         const nocov = path.join(bin, 'python-nocov');
         await fs.writeFile(
           nocov,
-          '#!/bin/sh\ncase "$*" in *"-m coverage"*) exit 1;; *) exit 0;; esac\n',
+          '#!/bin/sh\ncase "$*" in *"os.path.dirname(os.path.dirname"*) exit 1;; *) exit 0;; esac\n',
           { mode: 0o755 },
         );
-        // A console script that names it.
+        // A console script that names it via its shebang (absolute), so the
+        // resolve runs under THAT interpreter, not ours.
         await fs.writeFile(path.join(bin, 'tool'), `#!${nocov}\nprint(1)\n`, { mode: 0o755 });
 
         const result = await reportCoverage({
           projectRoot: FIXTURE,
-          // A hoisted PATH is forwarded to the resolver, so this points it at
-          // our bin without needing a new input. Our own python is fine, which
-          // is exactly why the old code sailed on and measured a run the gate
-          // never performed.
           testCmd: `PATH=${bin} tool`,
           _probeOverride: true,
         });
 
-        expect(result.measurementFailed).toBe(true);
-        expect(String(result.measurementFailureReason)).toContain(nocov);
+        // Coverage is not importable for the shebang interpreter, so the run the
+        // gate performed cannot be measured. Decline (coverageToolFound:false →
+        // UNPROVEN) rather than measure under OUR python — the unsound fallback
+        // this whole path exists to remove.
+        expect(result.coverageToolFound).toBe(false);
       },
     );
 
@@ -906,11 +908,11 @@ describe('python-line-coverage reporter', () => {
           shim,
           '#!/bin/sh\n' +
             'case "$*" in\n' +
-            '  *"coverage --version"*) exit 0 ;;\n' +
-            '  *"coverage run"*)\n' +
+            '  *"os.path.dirname(os.path.dirname"*) echo /fake/site ; exit 0 ;;\n' +
+            '  *" run "*)\n' +
             '     for a in "$@"; do case "$a" in *.coverage) : > "$a" ;; esac; done\n' +
             '     exit 0 ;;\n' +
-            '  *"coverage json"*) echo "boom" >&2; exit 1 ;;\n' +
+            '  *" json "*) echo "boom" >&2; exit 1 ;;\n' +
             '  *) exit 0 ;;\n' +
             'esac\n',
           { mode: 0o755 },
