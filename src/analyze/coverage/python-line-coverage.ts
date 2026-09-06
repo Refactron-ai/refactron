@@ -60,6 +60,17 @@ export interface CoverageReport {
 
 // THE RULE THIS MODULE IS GOVERNED BY
 //
+// SECURITY INVARIANT (ADR-17, GHSA-739m-x9gc-9wjv). The coverage DRIVER is
+// launched via `coverageLauncher` (a `-c` program that loads coverage from the
+// resolved site-packages FIRST, then restores the suite's sys.path). NEVER
+// `python -m coverage` and NEVER an absolute-package-path launch alone: both let
+// a repo-local `coverage.py` shadow the real tool (`-m` via cwd; the bare
+// abs-path launch via `PYTHONPATH=.`, measured), and a hostile one fabricates
+// coverage into a false SAFE. `resolveSitePackages` runs from a NEUTRAL cwd with
+// the BASE env only (never the testCmd's PYTHONPATH). If it cannot resolve
+// coverage, DECLINE — never fall back to `-m coverage`. This is the line most
+// likely to be "simplified" back into the hole; it is written in blood.
+//
 // `toCoverageRunArgs` returns non-null only when the argv and env it produces
 // are observationally equivalent to what `sh -c <testCmd>` would have run.
 // Anything it cannot prove equivalent returns null and the verdict degrades to
@@ -408,31 +419,58 @@ export function resolveConsoleScript(
   return null;
 }
 
-/** Probe whether `coverage.py` can actually RUN in the user's Python.
- *  `-m coverage --version`, not `-c "import coverage"`: a directory literally
- *  named `coverage/` on sys.path (a vitest/jest HTML coverage OUTPUT dir in
- *  the cwd is the common case) imports fine as a namespace package with
- *  `__file__ = None`, but cannot be executed as a module. Probing execution
- *  in `cwd` keeps the probe honest in the same context as the real run. */
-//
-//  `env` is REQUIRED, and deliberately not optional. This probe runs `-m` with
-//  the project root as cwd, so a `coverage.py` at the repository root shadows
-//  the real module and the DIFF UNDER VERIFICATION executes as us. An omitted
-//  argument would silently inherit our credentials into attacker-controlled
-//  code; a required parameter makes that a compile error instead. Reproduced
-//  before it was required: the `--version` probe handed a repo-local
-//  `coverage.py` REFACTRON_TOKEN, GITHUB_TOKEN and AWS_SECRET_ACCESS_KEY in
-//  plaintext while the two later spawns were correctly redacted.
-function probeCoverage(pythonBin: string, cwd: string, env: NodeJS.ProcessEnv): Promise<boolean> {
-  return new Promise((resolve) => {
-    const p = spawn(pythonBin, ['-m', 'coverage', '--version'], {
-      stdio: 'ignore',
-      cwd,
-      env,
+/** Resolve the site-packages directory that holds the REAL coverage for `runner`,
+ *  or null if coverage is not importable there.
+ *
+ *  SECURITY (ADR-17, GHSA-739m-x9gc-9wjv). Two properties, both load-bearing:
+ *
+ *  1. **Neutral cwd.** Runs from a fresh EMPTY temp dir, never the shadow, so a
+ *     repo-local `coverage.py` on cwd cannot shadow the resolve.
+ *  2. **Base env only, never the testCmd's `PYTHONPATH`.** An attacker-hoisted
+ *     `PYTHONPATH` (even the documented `PYTHONPATH=.`) would otherwise point the
+ *     resolve at a hostile `coverage.py` that precedes site-packages. We resolve
+ *     the interpreter's OWN installed coverage. Cost: a repo whose coverage is
+ *     importable ONLY via the testCmd's PYTHONPATH now declines to UNPROVEN — the
+ *     fail-safe direction.
+ *
+ *  Returns `dirname(dirname(coverage.__file__))` (the site-packages dir), which
+ *  `coverageLauncher` inserts at `sys.path[0]` so the driver's `import coverage`
+ *  resolves from there ahead of cwd and PYTHONPATH. A namespace `coverage/` dir
+ *  (`__file__ = None`) raises in the probe and yields null, exactly as before. */
+async function resolveSitePackages(
+  pythonBin: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string | null> {
+  const neutral = await fs.mkdtemp(path.join(os.tmpdir(), 'refactron-cov-probe-'));
+  try {
+    return await new Promise((resolve) => {
+      const p = spawn(
+        pythonBin,
+        ['-c', 'import coverage,os;print(os.path.dirname(os.path.dirname(coverage.__file__)))'],
+        { cwd: neutral, env, stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      let out = '';
+      p.stdout.on('data', (d: Buffer) => {
+        out += d.toString();
+      });
+      p.on('exit', (code) => resolve(code === 0 && out.trim() ? out.trim() : null));
+      p.on('error', () => resolve(null));
     });
-    p.on('exit', (code) => resolve(code === 0));
-    p.on('error', () => resolve(false));
-  });
+  } finally {
+    await fs.rm(neutral, { recursive: true, force: true });
+  }
+}
+
+/** The `-c` program that launches the coverage CLI immune to module shadowing.
+ *  It inserts the resolved site-packages at `sys.path[0]`, imports coverage from
+ *  THERE (ahead of cwd and PYTHONPATH), then removes the inserted entry so the
+ *  SUITE runs with the exact `sys.path` the gate gave it — observational
+ *  equivalence with the tests-gate run is preserved (verified: the suite's
+ *  `sys.path[0]` is identical to the gate's). Never `-m coverage`: that resolves
+ *  from cwd and reopens GHSA-739m-x9gc-9wjv. `site` is JSON-encoded, a valid
+ *  Python string literal on every platform. */
+function coverageLauncher(site: string): string {
+  return `import sys; sys.path.insert(0, ${JSON.stringify(site)}); import coverage.cmdline as C; del sys.path[0]; sys.exit(C.main())`;
 }
 
 /** Run a command in `cwd` with `env` and resolve to its exit code + stderr.
@@ -466,21 +504,6 @@ export async function reportCoverage(input: CoverageReportInput): Promise<Covera
   // to default to can only be made equivalent where it resolves.
   const testCmd = input.testCmd ?? 'python3 -m pytest -q';
 
-  const found =
-    input._probeOverride ??
-    (await probeCoverage(pythonBin, input.projectRoot, redactEnvForRunner(process.env)));
-  if (!found) {
-    return {
-      coverageToolFound: false,
-      coveredLines: new Set(),
-      measuredFiles: new Set(),
-      executableLines: new Map(),
-      excludedLines: new Map(),
-      runDurationMs: 0,
-      measurementFailed: false,
-    };
-  }
-
   const plan = toCoverageRunArgs(testCmd, resolveConsoleScript);
   if (plan === null) {
     return {
@@ -508,46 +531,35 @@ export async function reportCoverage(input: CoverageReportInput): Promise<Covera
     };
   }
 
-  // Run a resolved console script under the interpreter its shebang names, not
-  // under ours. `coverage run <script>` executes the file as source in the
-  // CURRENT interpreter, so without this a venv's pytest would run under
-  // whatever python we spawned: a different set of installed packages, and a
-  // failure the shadow-bypass floor would then blame on the user's sys.path,
-  // telling them to add PYTHONPATH=. when nothing was wrong with it.
+  // Run under the interpreter the resolved console script's shebang names, not
+  // ours: `coverage run <script>` executes the file in the CURRENT interpreter,
+  // so a venv's pytest must run under its own python or the shadow-bypass floor
+  // blames the user's sys.path.
+  const runner = plan.interpreter ?? pythonBin;
+
+  // Resolve the REAL coverage's site-packages for the runner (ADR-17). Neutral
+  // cwd + base env, so a repo-local `coverage.py` on cwd OR a hoisted
+  // `PYTHONPATH` cannot redirect us to a hostile coverage. Null means coverage
+  // is not importable for this interpreter (or a namespace `coverage/` dir): the
+  // run the gate performed cannot be measured, so decline — never fall back to
+  // `-m coverage`, the unsound form this change exists to remove.
   //
-  // That interpreter must be able to run coverage itself. If it cannot, there
-  // is no way to measure the run the gate actually performed, so decline. The
-  // alternative -- falling back to our python -- is the unsound measurement
-  // this whole change exists to remove.
-  let runner = pythonBin;
-  if (plan.interpreter !== undefined && plan.interpreter !== pythonBin) {
-    // Genuinely probed, never short-circuited by `_probeOverride`: that flag
-    // describes OUR python, and the point here is that the script names a
-    // different one.
-    // With the command's OWN environment, exactly as the real run gets it.
-    // A hoisted PYTHONPATH can be what makes coverage importable for that
-    // interpreter, and probing without it declines a measurable command
-    // while telling the user to install something they already have.
-    const usable = await probeCoverage(plan.interpreter, input.projectRoot, {
-      ...redactEnvForRunner(process.env),
-      ...plan.env,
-    });
-    if (!usable) {
-      return {
-        coverageToolFound: true,
-        coveredLines: new Set(),
-        measuredFiles: new Set(),
-        executableLines: new Map(),
-        excludedLines: new Map(),
-        runDurationMs: performance.now() - t0,
-        measurementFailed: true,
-        measurementFailureReason:
-          `the test command runs under ${plan.interpreter} (from its shebang), ` +
-          `which cannot run coverage. Install coverage for that interpreter, or use ` +
-          `a test command in module form such as \`python3 -m pytest\`.`,
-      };
-    }
-    runner = plan.interpreter;
+  // `_probeOverride` is the test-only injection: false forces the not-found
+  // decline; true and undefined resolve for real.
+  const site =
+    input._probeOverride === false
+      ? null
+      : await resolveSitePackages(runner, redactEnvForRunner(process.env));
+  if (site === null) {
+    return {
+      coverageToolFound: false,
+      coveredLines: new Set(),
+      measuredFiles: new Set(),
+      executableLines: new Map(),
+      excludedLines: new Map(),
+      runDurationMs: performance.now() - t0,
+      measurementFailed: false,
+    };
   }
 
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'refactron-cov-'));
@@ -581,7 +593,8 @@ export async function reportCoverage(input: CoverageReportInput): Promise<Covera
     // leaves nothing behind, and that must read as unknown, not zero.
     // `--branch` also measures arcs, catching an untaken branch on a conditional
     // whose header executed (ADR-14). No measured runtime cost.
-    const runArgs = ['-m', 'coverage', 'run', '--branch', '--data-file', dataFile, ...plan.args];
+    const launch = coverageLauncher(site);
+    const runArgs = ['-c', launch, 'run', '--branch', '--data-file', dataFile, ...plan.args];
     const run = await runCmd(runner, runArgs, input.projectRoot, env);
     const wroteData = await fs
       .access(dataFile)
@@ -609,7 +622,7 @@ export async function reportCoverage(input: CoverageReportInput): Promise<Covera
     // about, reproduced through the report step.
     const emit = await runCmd(
       runner,
-      ['-m', 'coverage', 'json', '--ignore-errors', '--data-file', dataFile, '-o', jsonFile],
+      ['-c', launch, 'json', '--ignore-errors', '--data-file', dataFile, '-o', jsonFile],
       input.projectRoot,
       env,
     );
