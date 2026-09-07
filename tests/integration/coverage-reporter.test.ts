@@ -130,6 +130,9 @@ describe('python-line-coverage reporter', () => {
     expect(result.coverageToolFound).toBe(false);
     expect(result.coveredLines.size).toBe(0);
     expect(result.executableLines.size).toBe(0);
+    // F3: the decline must name WHY, so the end-to-end coverage.unknownReason is
+    // not a bare undefined (the honest-degradation contract this file guards).
+    expect(String(result.measurementFailureReason ?? '')).toContain('not importable');
   });
 
   it('reports toolFound=false when import succeeds but coverage cannot run', async () => {

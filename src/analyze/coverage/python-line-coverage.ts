@@ -559,6 +559,14 @@ export async function reportCoverage(input: CoverageReportInput): Promise<Covera
       excludedLines: new Map(),
       runDurationMs: performance.now() - t0,
       measurementFailed: false,
+      // Name WHY, so the end-to-end `coverage.unknownReason` is not a bare
+      // undefined (the honest-degradation contract this file guards). The decline
+      // is deliberate: a repo-local `coverage.py` is never used as the driver, so
+      // "install it in the interpreter" is the real remedy, not "vendor one".
+      measurementFailureReason:
+        `coverage.py is not importable for ${runner}; install it in that ` +
+        `interpreter (e.g. \`${runner} -m pip install coverage\`) so the run the ` +
+        `tests gate performed can be measured. A repo-local coverage.py is not used.`,
     };
   }
 
