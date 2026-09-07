@@ -29,6 +29,10 @@ const STATIC_HELP = `
   verify-diff flags:
     --diff=<file>           Unified/git diff to verify (required)
     --test-cmd=<cmd>        Override the detected test command
+    --trusted               Trust the diff's AUTHOR. Without it a would-be-SAFE is
+                            withheld (→ UNPROVEN): coverage is measured by running
+                            the diff's own suite in-process, which an untrusted
+                            diff can forge. Default: untrusted.
     --mutate                Deep check: mutate changed statements; a surviving
                             mutant caps the verdict at UNPROVEN (Python, slower)
     --json                  Machine-readable verdict report

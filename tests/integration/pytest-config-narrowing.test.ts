@@ -79,6 +79,7 @@ describe('a pytest config that narrows the suite cannot earn SAFE (#137)', () =>
         const root = await fixture(file, body);
         const report = await verifyDiff({
           repoRoot: root,
+          trusted: true,
           unifiedDiff: DIFF,
           testCmd: 'python3 -m pytest -q',
         });
@@ -100,6 +101,7 @@ describe('a pytest config that narrows the suite cannot earn SAFE (#137)', () =>
       const root = await fixture(null, '');
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         unifiedDiff: DIFF,
         testCmd: 'python3 -m pytest -q',
       });
@@ -118,6 +120,7 @@ describe('a pytest config that narrows the suite cannot earn SAFE (#137)', () =>
       const root = await fixture('pytest.ini', '[pytest]\naddopts = -q --strict-markers\n');
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         unifiedDiff: DIFF,
         testCmd: 'python3 -m pytest -q',
       });

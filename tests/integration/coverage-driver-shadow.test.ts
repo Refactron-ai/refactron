@@ -90,6 +90,9 @@ describe('a forged coverage.py cannot earn SAFE (GHSA A1)', () => {
       ].join('\n');
       const report = await verifyDiff({
         repoRoot: root,
+        // trusted: the A1 launcher (not the untrusted trust gate) must be what
+        // refuses the forge, so this pins the mechanism, not the blanket withhold.
+        trusted: true,
         unifiedDiff: diff,
         testCmd: 'python3 -m pytest -q',
       });
@@ -98,6 +101,13 @@ describe('a forged coverage.py cannot earn SAFE (GHSA A1)', () => {
       // is genuinely uncovered, so the verdict cannot be SAFE. (Red on main:
       // returns SAFE from the fabricated report.)
       expect(report.verdict).not.toBe('SAFE');
+      // Pin the MECHANISM, not just the verdict string: the launcher ran the REAL
+      // coverage (tool present) and honestly measured the changed line as
+      // uncovered. Without these, a future launcher that silently measured NOTHING
+      // (degrading to unknown → UNPROVEN) would also satisfy not.toBe('SAFE') while
+      // the forge quietly won on any trusted run.
+      expect(report.coverage.tool).toBe('coverage.py');
+      expect(report.coverage.changedLinesCovered).toBe(false);
     },
     240_000,
   );
@@ -134,10 +144,82 @@ describe('a forged coverage.py cannot earn SAFE (GHSA A1)', () => {
       ].join('\n');
       const report = await verifyDiff({
         repoRoot: root,
+        // trusted: pins the A1 launcher mechanism (see the plain case), not the gate.
+        trusted: true,
         unifiedDiff: diff,
         testCmd: 'PYTHONPATH=. python3 -m pytest -q',
       });
       expect(report.verdict).not.toBe('SAFE');
+      // Same mechanism pin as the plain case: real coverage ran and honestly
+      // measured the changed line uncovered, so this proves the launcher, not a
+      // silent measurement failure.
+      expect(report.coverage.tool).toBe('coverage.py');
+      expect(report.coverage.changedLinesCovered).toBe(false);
+    },
+    240_000,
+  );
+
+  it.skipIf(NO_PYTHON)(
+    'an untrusted sitecustomize sys.modules forge does not earn SAFE (withheld by the trust gate)',
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'a1sc-'));
+      roots.push(root);
+      await fs.writeFile(
+        path.join(root, 'app.py'),
+        'def used(x):\n    return x + 1\n\n\ndef sneaky(token):\n    return token == "expected"\n',
+      );
+      // sitecustomize runs at interpreter startup (site imports it off
+      // PYTHONPATH=.), BEFORE the -c launcher, and pre-seeds sys.modules['coverage']
+      // with a fake: sys.path.insert cannot dislodge an already-cached module. The
+      // A1 launcher does NOT close this (proven: -S re-exposes stdlib shadowing;
+      // purge is defeated by a meta_path finder). The mitigation is the trust gate
+      // (ADR-19): for an untrusted diff the forgeable measurement is not trusted, so
+      // the would-be-SAFE is withheld regardless of whether the tool was substituted.
+      await fs.writeFile(
+        path.join(root, 'sitecustomize.py'),
+        [
+          'import sys, types, json',
+          'def _main():',
+          '    a = sys.argv[1:]',
+          '    def after(f): return a[a.index(f)+1] if f in a else None',
+          "    if a and a[0] == 'run':",
+          "        df = after('--data-file')",
+          "        if df: open(df,'w').write('forged')",
+          '        return 0',
+          "    if a and a[0] == 'json':",
+          "        out = after('-o')",
+          "        p = {'files': {'app.py': {'executed_lines': list(range(1,100)), 'missing_lines': [], 'excluded_lines': []}}}",
+          "        if out: json.dump(p, open(out,'w'))",
+          '        return 0',
+          '    return 0',
+          "cov = types.ModuleType('coverage'); cmd = types.ModuleType('coverage.cmdline')",
+          'cmd.main = _main; cov.cmdline = cmd',
+          "sys.modules['coverage'] = cov; sys.modules['coverage.cmdline'] = cmd",
+          '',
+        ].join('\n'),
+      );
+      await fs.mkdir(path.join(root, 'tests'));
+      await fs.writeFile(
+        path.join(root, 'tests', 'test_app.py'),
+        'from app import used\n\n\ndef test_used():\n    assert used(1) == 2\n',
+      );
+      const diff = [
+        '--- a/app.py',
+        '+++ b/app.py',
+        '@@ -5,2 +5,2 @@ def sneaky(token):',
+        ' def sneaky(token):',
+        '-    return token == "expected"',
+        '+    return token == "expected" or token == "__backdoor__"',
+        '',
+      ].join('\n');
+      // Untrusted (default): the trust gate is the mitigation for this vector.
+      const report = await verifyDiff({
+        repoRoot: root,
+        unifiedDiff: diff,
+        testCmd: 'PYTHONPATH=. python3 -m pytest -q',
+      });
+      expect(report.verdict).toBe('UNPROVEN');
+      expect(report.reason).toContain('SAFE is withheld');
     },
     240_000,
   );

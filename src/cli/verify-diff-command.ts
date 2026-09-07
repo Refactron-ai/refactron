@@ -16,6 +16,7 @@ interface VerifyDiffFlags {
   testCmd: string | null;
   mutate: boolean;
   flakyCheck: boolean;
+  trusted: boolean;
 }
 
 export function parseVerifyDiffFlags(argv: string[]): VerifyDiffFlags {
@@ -25,10 +26,15 @@ export function parseVerifyDiffFlags(argv: string[]): VerifyDiffFlags {
   let testCmd: string | null = null;
   let mutate = false;
   let flakyCheck = false;
+  let trusted = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === '--json') {
       json = true;
+      continue;
+    }
+    if (a === '--trusted') {
+      trusted = true;
       continue;
     }
     if (a === '--mutate') {
@@ -63,7 +69,7 @@ export function parseVerifyDiffFlags(argv: string[]): VerifyDiffFlags {
     if (repoRoot !== null) throw new VerifyDiffFlagError(`unexpected extra argument: ${a}`);
     repoRoot = a;
   }
-  return { repoRoot: repoRoot ?? '.', diffPath, json, testCmd, mutate, flakyCheck };
+  return { repoRoot: repoRoot ?? '.', diffPath, json, testCmd, mutate, flakyCheck, trusted };
 }
 
 const VERDICT_COLOR: Record<string, string> = {
@@ -229,6 +235,7 @@ export async function runVerifyDiffCommand(argv: string[]): Promise<number> {
       ...(flags.testCmd ? { testCmd: flags.testCmd } : {}),
       ...(flags.mutate ? { mutate: true } : {}),
       ...(flags.flakyCheck ? { flakyCheck: true } : {}),
+      ...(flags.trusted ? { trusted: true } : {}),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

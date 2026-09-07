@@ -59,6 +59,14 @@ export interface VerdictReport {
   // Bump on any breaking change to the fields below.
   reportVersion: 1;
   verdict: Verdict;
+  // Whether the input was declared TRUSTED (ADR-19). Coverage and pass/fail are
+  // measured by running the diff's OWN suite in-process, which a hostile diff can
+  // forge (a ~6-line conftest.py; GHSA Finding 1). So an untrusted would-be-SAFE
+  // is WITHHELD and floored to UNPROVEN — see the trust gate in fuseVerdict. This
+  // field says which regime produced the verdict, so a consumer can tell a
+  // trust-withheld UNPROVEN from a real coverage gap. Additive: an absent value on
+  // a stored report is a pre-ADR-19 engine (read `engineVersion` for the rules).
+  trustMode: 'trusted' | 'untrusted';
   gates: { syntax: GateResult; imports: GateResult; tests: GateResult };
   changedFiles: string[];
   // Subset of changedFiles matching test conventions. A note, not a verdict
@@ -141,17 +149,23 @@ const BASELINE_RED_SUBSTRING = 'baseline tests already fail';
 // compile error instead. The FIELD on VerdictReport stays optional, which is
 // load-bearing for a different reason: its absence is how a consumer tells a
 // pre-0.5.0 stored report from one produced by an engine that floors.
+// `trusted` is REQUIRED for the same reason `testScope` is: an optional trust
+// flag would make "a new call site forgot to pass it" default to the permissive
+// regime and leak a false SAFE. Required makes the omission a compile error. The
+// safe default (untrusted) lives at the I/O boundary (VerifyDiffInput), not here.
 export function fuseVerdict(
   result: VerificationResult,
   changedFiles: string[],
   cov: CoverageAssessment,
   testScope: TestScopeAssessment,
+  trusted: boolean,
   mutation?: MutationResult,
   stability?: StabilityResult,
 ): VerdictReport {
   const flakyTests = flakySuspectsOf(result.gates.tests);
   const base = {
     reportVersion: 1 as const,
+    trustMode: (trusted ? 'trusted' : 'untrusted') as 'trusted' | 'untrusted',
     gates: result.gates,
     changedFiles,
     testFilesChanged: changedFiles.filter(isTestFile),
@@ -238,18 +252,44 @@ export function fuseVerdict(
   // changedLinesCovered, so a future producer that sets one without flooring
   // cannot leak SAFE. A surviving mutant is the ADR-15 conjunct; a varied test
   // is the #146 conjunct.
-  if (
+  const wouldBeSafe =
     cov.changedLinesCovered === true &&
     (cov.partialBranches?.length ?? 0) === 0 &&
     (mutation?.survivors.length ?? 0) === 0 &&
     (stability?.varied.length ?? 0) === 0 &&
     !flakyReason &&
-    !narrowedReason
-  ) {
+    !narrowedReason;
+  if (wouldBeSafe && trusted) {
     return {
       verdict: 'SAFE',
       ...base,
       reason: 'Tests pass and the changed code is covered.',
+    };
+  }
+  if (wouldBeSafe) {
+    // THE TRUST GATE (ADR-19, GHSA Finding 1). Every input to this SAFE — the
+    // tests-pass gate AND the changed-line coverage — is produced by running the
+    // diff's OWN suite in the SAME process as the coverage collector. A hostile
+    // diff forges a covered line with ~6 lines of conftest.py
+    // (coverage.Coverage.current().get_data().add_arcs), reproduced end-to-end.
+    // The forgery is undetectable from inside that process, so for an UNTRUSTED
+    // diff we do not trust the measurement: SAFE is withheld and the verdict
+    // floors at UNPROVEN. This is the unified mitigation for the whole in-process
+    // forgery family (it stops trusting the forgeable evidence rather than trying
+    // to out-detect the attacker); the launcher/exclusion fixes (ADR-17/18) are
+    // defense-in-depth for the trusted path. A trusted author keeps SAFE; a
+    // hermetic run is the future second path to trust-grade SAFE. Distinct
+    // substring ("SAFE is withheld"): consumers pattern-match it to tell this from
+    // a real coverage gap, which `trustMode` also disambiguates.
+    return {
+      verdict: 'UNPROVEN',
+      ...base,
+      reason:
+        'SAFE is withheld: coverage and the passing tests were measured by running ' +
+        'the diff’s own suite in-process, which an untrusted diff can forge, so a ' +
+        'would-be-SAFE cannot be trusted here. The changed code does appear covered, ' +
+        'but that is not proof for an untrusted diff. Re-run with --trusted if you ' +
+        'trust the author, or verify through a hermetic run.',
     };
   }
 
@@ -300,8 +340,8 @@ export function fuseVerdict(
   const excludedReason =
     stats && excludedCount > 0 && stats.covered + excludedCount === stats.total
       ? excludedCount === 1
-        ? `Tests pass, but a changed statement is excluded from coverage (e.g. \`# pragma: no cover\` or a coverage config) and cannot be proven; for an untrusted diff an excluded change is not verified. Remove the exclusion or verify it another way.`
-        : `Tests pass, but ${excludedCount} changed statements are excluded from coverage and cannot be proven; for an untrusted diff an excluded change is not verified. Remove the exclusions or verify them another way.`
+        ? `Tests pass, but a changed statement is excluded from coverage (e.g. \`# pragma: no cover\` or a coverage config) and cannot be proven by coverage. Remove the exclusion or verify the change another way.`
+        : `Tests pass, but ${excludedCount} changed statements are excluded from coverage and cannot be proven by coverage. Remove the exclusions or verify them another way.`
       : null;
   // Named before partialReason: statement coverage can be complete here, so
   // "N of N exercised" would mislead (ADR-14).

@@ -66,6 +66,7 @@ describe('an attacker coverage-exclusion cannot earn SAFE (GHSA A2)', () => {
       ].join('\n');
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         unifiedDiff: diff,
         testCmd: 'python3 -m pytest -q',
       });
@@ -96,6 +97,7 @@ describe('an attacker coverage-exclusion cannot earn SAFE (GHSA A2)', () => {
       ].join('\n');
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         unifiedDiff: diff,
         testCmd: 'python3 -m pytest -q',
       });

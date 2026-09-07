@@ -104,6 +104,7 @@ describe('a flaky test downgrades SAFE under --flaky-check (#146)', () => {
       const root = await fixture('flaky');
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         unifiedDiff: DIFF,
         testCmd: 'python3 -m pytest -q',
       });
@@ -119,6 +120,7 @@ describe('a flaky test downgrades SAFE under --flaky-check (#146)', () => {
       const root = await fixture('flaky');
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         unifiedDiff: DIFF,
         testCmd: 'python3 -m pytest -q',
         flakyCheck: true,
@@ -140,6 +142,7 @@ describe('a flaky test downgrades SAFE under --flaky-check (#146)', () => {
       const root = await fixture('stable');
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         unifiedDiff: DIFF,
         testCmd: 'python3 -m pytest -q',
         flakyCheck: true,
@@ -163,6 +166,7 @@ describe('a flaky test downgrades SAFE under --flaky-check (#146)', () => {
       const root = await fixture('slow');
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         unifiedDiff: DIFF,
         testCmd: 'python3 -m pytest -q',
         flakyCheck: true,

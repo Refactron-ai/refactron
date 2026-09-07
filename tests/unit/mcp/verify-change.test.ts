@@ -56,6 +56,7 @@ describe('handleVerifyChange', () => {
     async () => {
       const res = await handleVerifyChange({
         repoRoot: FIXTURE,
+        trusted: true,
         edits: [
           {
             path: 'calc.py',
@@ -67,6 +68,7 @@ describe('handleVerifyChange', () => {
       });
       const report = JSON.parse(res.content[0]!.text);
       expect(report.verdict).toBe('SAFE');
+      expect(report.trustMode).toBe('trusted');
       expect(res.isError).toBeFalsy();
       // testScope is a VERDICT INPUT (#112), and this is the surface every agent
       // calls. The report is serialized verbatim so the field is carried
@@ -89,13 +91,41 @@ describe('handleVerifyChange', () => {
   );
 
   it.skipIf(NO_COVERAGE)(
+    'defaults to UNTRUSTED on the MCP surface: a would-be-SAFE is withheld',
+    async () => {
+      // The MCP tool is the agent-facing, untrusted-by-default surface: an agent
+      // verifying a change it did not author (or one it did) cannot self-certify
+      // trust in-band. The same edit that is SAFE with trusted:true must return
+      // UNPROVEN here, because the in-process measurement is forgeable (ADR-19).
+      const res = await handleVerifyChange({
+        repoRoot: FIXTURE,
+        edits: [
+          {
+            path: 'calc.py',
+            newContent:
+              'def add(a, b):\n    return b + a\n\n\ndef unused_helper(a, b):\n    return a - b\n',
+          },
+        ],
+        testCmd: 'python3 -m pytest -q',
+      });
+      const report = JSON.parse(res.content[0]!.text);
+      expect(report.trustMode).toBe('untrusted');
+      expect(report.verdict).toBe('UNPROVEN');
+      expect(report.reason).toContain('SAFE is withheld');
+    },
+    180_000,
+  );
+
+  it.skipIf(NO_COVERAGE)(
     'reports a narrowed scope on the MCP surface, and floors the verdict',
     async () => {
       // An agent narrowing to the tests it just wrote is the threat model
       // ADR-12 exists for, and the MCP server applies no authentication, so
-      // this is the realistic caller rather than an edge case.
+      // this is the realistic caller rather than an edge case. trusted:true so the
+      // NARROWED floor is what's under test, not the untrusted trust gate.
       const res = await handleVerifyChange({
         repoRoot: FIXTURE,
+        trusted: true,
         edits: [
           {
             path: 'calc.py',
