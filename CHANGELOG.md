@@ -39,11 +39,18 @@ PRs in CI, the default is now the correct one: those verdicts degrade to
 `UNPROVEN` instead of a forgeable `SAFE`. Exit codes are unchanged (`UNPROVEN` and
 `SAFE` both exit 0).
 
-Also hardened, as defense-in-depth for the trusted path:
+Also hardened:
 
-- A repo-root `coverage.py` can no longer shadow the coverage driver (ADR-17).
-- A changed statement the diff excludes from coverage (`# pragma: no cover`, a
-  coverage config) now floors the verdict instead of being subtracted (ADR-18).
+- Coverage-driver isolation — a repo-root `coverage.py` can no longer shadow the
+  driver (ADR-17). Defense-in-depth for the trusted path.
+- Excluded-statement floor — a changed statement the diff excludes from coverage
+  (`# pragma: no cover`, a coverage config) now floors the verdict instead of
+  being subtracted (ADR-18). Trusted-path defense.
+- Credential redaction to the verified suite is strengthened from a name denylist
+  to segment-name plus value-shape matching — token prefixes, `user:pass@`
+  connection strings, PEM blocks, high-entropy blobs — closing
+  GHSA-7gr9-rqqx-xg6m. `REFACTRON_FORWARD_ENV` re-admits a var an operator knows is
+  a non-secret; redaction stays best-effort, not a sandbox (ADR-20).
 
 
 ### Added — `--flaky-check`, an opt-in stability check

@@ -21,8 +21,9 @@ unabridged log lives in [`CHANGELOG.md`](https://github.com/Refactron-ai/refactr
 
   If you verify your own changes, add `--trusted` to keep `SAFE`. If you verify
   untrusted PRs, the default is now correct: a forgeable `SAFE` becomes
-  `UNPROVEN`. Also hardened: coverage-driver isolation (ADR-17) and an
-  excluded-statement floor (ADR-18).
+  `UNPROVEN`. Also hardened: coverage-driver isolation (ADR-17), an
+  excluded-statement floor (ADR-18), and stronger credential redaction to the
+  verified suite (value-shape matching; closes GHSA-7gr9-rqqx-xg6m, ADR-20).
 
   **Also in this release:** `--flaky-check`, an opt-in stability rerun, and
   `--mutate` now perturbs constants, not only operators.
