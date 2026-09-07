@@ -1,6 +1,6 @@
 {
   "name": "refactron",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "A verification layer for code change: verify any diff for a SAFE / UNSAFE / UNPROVEN verdict, from the CLI or over MCP.",
   "author": "Om Sherikar <omsherikar0229@gmail.com>",
   "bin": {
