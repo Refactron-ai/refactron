@@ -16,10 +16,13 @@ import { describe, it, expect } from 'vitest';
 import { redactEnvForRunner } from '../../../src/verify/runners/run.js';
 import { execSync } from 'node:child_process';
 
-/** The planted-module probe below is meaningless without a real interpreter. */
-function hasPython3(): boolean {
+/** The planted-module probe below is meaningless unless coverage is importable:
+ *  without it the driver DECLINES before spawning, `seen` is empty for a reason
+ *  unrelated to isolation, and the assertion passes vacuously (F2). Gate on the
+ *  real precondition, not merely on python3 existing. */
+function hasCoverage(): boolean {
   try {
-    execSync('python3 -c ""', { stdio: 'ignore' });
+    execSync('python3 -c "import coverage"', { stdio: 'ignore' });
     return true;
   } catch {
     return false;
@@ -139,7 +142,7 @@ describe('the redaction survives the spawn, not just the function', () => {
 // `expect('').not.toContain(...)` is a tautology. That is the exact shape
 // CLAUDE.md bans - a test that reports PASSED while proving nothing.
 describe('the coverage probe does not leak credentials to repo-controlled code', () => {
-  it.skipIf(!hasPython3())(
+  it.skipIf(!hasCoverage())(
     'a coverage.py planted at the repo root is never executed by the driver (A1)',
     async () => {
       const fs = await import('node:fs/promises');
@@ -167,8 +170,9 @@ describe('the coverage probe does not leak credentials to repo-controlled code',
       process.env.REFACTRON_TOKEN = 'sk_live_canary_probe';
       process.env.GITHUB_TOKEN = 'ghp_canary_probe';
       process.env.AWS_SECRET_ACCESS_KEY = 'canary_probe_aws';
+      let rep: Awaited<ReturnType<typeof reportCoverage>> | undefined;
       try {
-        await reportCoverage({ projectRoot: root, changedFiles: [] } as never);
+        rep = await reportCoverage({ projectRoot: root, changedFiles: [] } as never);
       } catch {
         // The probe is what is under test. Whether the run that follows it can
         // produce a report is irrelevant here and depends on the environment.
@@ -190,6 +194,13 @@ describe('the coverage probe does not leak credentials to repo-controlled code',
       // (probe, run, or json). The planted module cannot be hijacked at all, so it
       // cannot see credentials — redacted or otherwise — because it never runs.
       // Before the fix the `-m coverage` probe executed this file in the repo root.
+      //
+      // F2 anti-vacuity: assert the driver ACTUALLY resolved and ran the real
+      // coverage first. Without this, `seen === ''` is a tautology on any machine
+      // where the resolve declines (coverage not importable) and nothing spawns —
+      // the exact CLAUDE.md-banned "passes while proving nothing". hasCoverage()
+      // gates the skip, and coverageToolFound === true proves the run happened.
+      expect(rep?.coverageToolFound).toBe(true);
       expect(seen).toBe('');
     },
     120_000,
