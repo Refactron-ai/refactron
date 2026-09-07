@@ -30,16 +30,19 @@ Refactron runs two independent checks and fuses them:
 
 The fusion rule:
 
-| Gates         | Changed statements covered? | Verdict    | Reason                                                                  |
-| ------------- | --------------------------- | ---------- | ----------------------------------------------------------------------- |
-| A gate failed | n/a                         | `UNSAFE`   | The failing gate's blocking reason.                                     |
-| All passed    | yes                         | `SAFE`     | "Tests pass and the changed code is covered."                           |
-| All passed    | no                          | `UNPROVEN` | "Tests pass, but the changed code is not exercised by any test."        |
-| All passed    | couldn't tell               | `UNPROVEN` | "Tests pass, but coverage of the changed code could not be determined." |
+| Gates         | Changed statements covered? | Author trusted? | Verdict    | Reason                                                                  |
+| ------------- | --------------------------- | --------------- | ---------- | ----------------------------------------------------------------------- |
+| A gate failed | n/a                         | n/a             | `UNSAFE`   | The failing gate's blocking reason.                                     |
+| All passed    | yes                         | yes             | `SAFE`     | "Tests pass and the changed code is covered."                           |
+| All passed    | yes                         | no (default)    | `UNPROVEN` | "SAFE is withheld: coverage was measured in-process, which an untrusted diff can forge." |
+| All passed    | no                          | n/a             | `UNPROVEN` | "Tests pass, but the changed code is not exercised by any test."        |
+| All passed    | couldn't tell               | n/a             | `UNPROVEN` | "Tests pass, but coverage of the changed code could not be determined." |
+
+A would-be-`SAFE` is withheld to `UNPROVEN` when the diff's author is untrusted, which is the default. Coverage and the pass/fail gates are measured by running the diff's own suite in-process, which an untrusted diff can forge, so `SAFE` is granted only when you declare the author trusted (or run the change hermetically). `UNSAFE` and `UNPROVEN` do not depend on trust.
 
 ## SAFE
 
-Every gate passed, and every changed **statement** your suite could reach was executed by it. The change is on a tested path, and that path is green.
+Every gate passed, and every changed **statement** your suite could reach was executed by it. The change is on a tested path, and that path is green. `SAFE` additionally requires that the diff's author be declared trusted; the default is untrusted, which withholds it. See [An untrusted diff cannot be SAFE](#an-untrusted-diff-cannot-be-safe).
 
 `SAFE` is a per-**statement** check. Every changed statement your suite could
 have executed did execute. A file with some exercised and some unexercised
@@ -49,15 +52,20 @@ changed statements reads as `UNPROVEN`, and the reason names the ratio:
 [UNPROVEN] Tests pass, but only 3 of 14 changed statements were exercised.
 ```
 
-Statements coverage.py **excluded** are subtracted from the count rather than
-held against you. `# pragma: no cover` bodies and `if TYPE_CHECKING:` blocks can
-never be executed by any test, so requiring them would put `SAFE` out of reach
-for any change that adds a typing-only import. They are still listed in
-`coverage.uncovered`, tagged `excluded`, with a hint telling you to review them
-by hand instead of asking for an impossible test.
+A changed statement coverage.py **excluded** floors the verdict to `UNPROVEN`.
+`# pragma: no cover` bodies, `if TYPE_CHECKING:` blocks, and any line matched by a
+`.coveragerc` or `pyproject` exclude rule are all part of the diff, so a change can
+add the exclusion itself and mark a live line excluded that no test will ever run.
+An excluded changed statement is not evidence of anything, so `SAFE` is withheld.
+It is still listed in `coverage.uncovered`, tagged `excluded`, with a hint saying
+to remove the exclusion or verify the change another way, not to write a test that
+could never pass.
 
-A change consisting _entirely_ of excluded statements does not reach `SAFE`:
-there is nothing a test could have proven about it.
+This is stricter than 0.4.x, where an excluded statement was subtracted from what
+`SAFE` required. A diff that only adds a typing-only `if TYPE_CHECKING:` import now
+reads `UNPROVEN`, not `SAFE`. That is the honest verdict: the exclusion set travels
+inside the diff and is attacker-controlled, so any covered-count that trusts it is
+forgeable.
 
 `SAFE` also requires that changed **conditionals** were fully branched. A changed
 `if`/`elif` whose header ran but one of whose branches no test entered floors at
@@ -151,19 +159,17 @@ code is covered, because a green run of the tests you selected says nothing
 about the tests you did not. See [A narrowed test command cannot be
 SAFE](#a-narrowed-test-command-cannot-be-safe) below.
 
-`SAFE` reports still list what they did not prove. `coverage.uncovered` is always populated, and `coverage.changedStatements` gives the ratio outright:
+A `SAFE` report carries the full coverage record, and `coverage.changedStatements` gives the ratio outright:
 
 ```json
 "coverage": {
   "changedLinesCovered": true,
-  "changedStatements": { "total": 40, "covered": 39 },
-  "uncovered": [{ "file": "calc.py", "line": 31, "excluded": true }]
+  "changedStatements": { "total": 40, "covered": 40 },
+  "uncovered": []
 }
 ```
 
-Thirty-nine of forty changed statements ran. The fortieth sits in a `# pragma: no cover` or `if TYPE_CHECKING:` block that no test can reach, so it is subtracted from what `SAFE` requires and still listed rather than hidden. That is the only shape of gap a `SAFE` can now carry: a verdict that concealed it would be easier to read and worth less.
-
-A report showing `changedLinesCovered: true` with a genuinely unexercised statement (`"total": 40, "covered": 12` and no `excluded` flag) was produced by Refactron 0.4.0 or earlier, under the older per-file rule noted above.
+Every changed statement ran. A `SAFE` no longer carries an unexercised or an excluded changed statement: either one floors the verdict to `UNPROVEN`. An unexercised statement is a plain coverage gap; an excluded one is attacker-controllable, so it is not proof of anything. The 0.4.x reports that showed a `SAFE` with `"excluded": true` in `uncovered`, or with `covered` below `total`, were produced under the older rules and no longer occur.
 
 `SAFE` requires coverage, and [coverage is Python-only](#the-python-only-limitation). A change that isn't entirely Python can't reach `SAFE` today.
 
@@ -255,8 +261,11 @@ typically reads as unexercised, which is the honest answer rather than a conveni
 
 Some statements can never be exercised, by design. A `# pragma: no cover` block, or an import under
 `if TYPE_CHECKING:`, is excluded from `coverage.py`'s judgement and never executes under test. A
-diff that touches only such code therefore **cannot reach `SAFE`**, no matter how good your suite
-is: there is no execution to observe, and Refactron will not certify what it did not see.
+diff with **any** excluded changed statement therefore **cannot reach `SAFE`**: the exclusion floors
+the whole file to `UNPROVEN`, however well the rest of the change is covered. The exclusion set
+travels inside the diff (an inline pragma, a `.coveragerc`, a `pyproject` rule), so an untrusted
+change could mark a live line excluded and no test would ever run it. Refactron will not certify a
+statement it was told to ignore.
 
 These entries are marked, and their hints say what is actually true instead of asking for a test
 that cannot exist:
@@ -315,6 +324,39 @@ Refactron cannot turn a weak suite into a strong one, but it refuses to overstat
 A worked example from our own hardening runs, on a real library. Jinja2's `truncate` filter guards its early return with `if len(s) <= length + leeway`. Change that `<=` to `<` and the behavior genuinely changes: at the exact boundary the string is now truncated instead of returned whole. All 911 tests in Jinja2's suite still pass, because none of them lands on that precise boundary, and the changed line is covered, so the verdict is `SAFE`.
 
 That verdict is correct about what it claims (the suite ran this line and stayed green) and it is still not a proof of correctness. Boundary conditions are exactly where suites tend to be thin. Read `SAFE` as "your tests approve this change", then decide separately whether your tests are strong where this change lives.
+
+## An untrusted diff cannot be SAFE
+
+Coverage and the pass/fail gates are measured by running the diff's **own** test
+suite, in the same process as the coverage collector. A hostile diff therefore owns
+the process the measurement runs in: a few lines of `conftest.py` can mark a
+never-executed changed line as covered and earn a `SAFE` the change never deserved.
+The forgery is undetectable from inside the process the forger controls.
+
+So a would-be-`SAFE` is **withheld** and floored to `UNPROVEN` unless you declare
+the diff's author trusted. The default is untrusted, because the product verifies
+changes you did not write (an AI agent's, an outside contributor's), and the safe
+default is the one that does not trust a forgeable measurement:
+
+```bash
+refactron verify-diff . --diff change.diff              # untrusted (default): SAFE withheld, returns UNPROVEN
+refactron verify-diff . --diff change.diff --trusted    # trusted: SAFE allowed
+```
+
+`--trusted` is asserted by you, the operator, and never inferred from the diff. The
+diff is the untrusted input; it cannot certify itself. Set it only for a change
+whose author you already trust (your own, or a reviewed internal one), never for an
+external or agent-authored diff you are verifying precisely because you do not trust
+it yet.
+
+`UNSAFE` is unaffected: an attacker does not forge a gate failure against their own
+goal, so only `SAFE` is withheld. The withheld verdict carries a distinct reason
+(it contains "SAFE is withheld"), and every report stamps `trustMode` (`trusted` or
+`untrusted`), so a consumer can tell a trust withhold from a real coverage gap.
+
+A trust-grade `SAFE` over a diff you do not trust cannot be produced by a local,
+in-process run at all. It needs a hermetic run whose measurement the suite cannot
+reach, the planned second path to a trusted `SAFE` alongside `--trusted`.
 
 ## A narrowed test command cannot be SAFE
 

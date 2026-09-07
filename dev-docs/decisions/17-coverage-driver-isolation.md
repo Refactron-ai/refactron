@@ -82,9 +82,17 @@ sys.exit(C.main())
 ## Consequences
 
 - **Positive.** Closes GHSA-739m-x9gc-9wjv, including under `PYTHONPATH=.`.
-  Fail-safe by construction: the only verdict move is toward UNPROVEN. As a bonus
-  it also closes a hostile repo-root `sitecustomize.py` *driver-startup* vector
-  (the driver's neutral cwd never imports it).
+  Fail-safe by construction: the only verdict move is toward UNPROVEN.
+
+  Correction (2026-09-07): an earlier version of this bullet claimed the fix also
+  closed a repo-root `sitecustomize.py` driver-startup vector "because the driver's
+  neutral cwd never imports it." That was WRONG — only the site-packages RESOLVE
+  runs from a neutral cwd; the DRIVER runs from the shadow tree, so `site` imports
+  a shadow `sitecustomize.py` at startup exactly as before. The launcher does NOT
+  close the `sitecustomize` sys.modules substitution (F1), and no in-process
+  launcher can (attempts with `-S` and with a `sys.modules` purge both failed;
+  see ADR-19). That vector and the general in-process forgery family are mitigated
+  by the trust-mode gate (ADR-19), which withholds SAFE for an untrusted diff.
 - **Negative, fail-safe.** A repo whose coverage is importable ONLY via the
   testCmd's `PYTHONPATH` (not installed in the interpreter) now declines to
   UNPROVEN. A repo that vendors a root `coverage.py` without pip-installing
