@@ -92,11 +92,16 @@ describe('an in-process conftest.py cannot forge coverage into SAFE (red-team Fi
         unifiedDiff: diff,
         testCmd: 'PYTHONPATH=. python3 -m pytest -q',
       });
-      // The trust gate (ADR-19) is the mitigation: for an untrusted diff the
-      // in-process measurement is not trusted, so the would-be-SAFE is withheld —
-      // the forge succeeds at the coverage level but cannot buy a SAFE verdict.
+      // Security invariant, robust across platforms: the forge cannot earn SAFE.
       expect(report.verdict).toBe('UNPROVEN');
-      expect(report.reason).toContain('SAFE is withheld');
+      // Where the forge actually LANDS (coverage reports the changed line covered),
+      // prove it was the TRUST GATE (ADR-19) that withheld the would-be-SAFE. On a
+      // platform where the forge fails to match coverage's internal file key (e.g.
+      // Windows path handling), coverage's own gap catches the untested line
+      // instead — still UNPROVEN, never SAFE, but via a different reason.
+      if (report.coverage.changedLinesCovered === true) {
+        expect(report.reason).toContain('SAFE is withheld');
+      }
     },
     240_000,
   );

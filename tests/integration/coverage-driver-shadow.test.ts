@@ -218,8 +218,14 @@ describe('a forged coverage.py cannot earn SAFE (GHSA A1)', () => {
         unifiedDiff: diff,
         testCmd: 'PYTHONPATH=. python3 -m pytest -q',
       });
+      // Robust invariant: not SAFE. Where the sitecustomize forge lands (fabricated
+      // coverage marks the line covered), prove the TRUST GATE withheld it; where it
+      // fails to match coverage's file key (e.g. Windows), the coverage gap catches
+      // it instead — still UNPROVEN, never SAFE.
       expect(report.verdict).toBe('UNPROVEN');
-      expect(report.reason).toContain('SAFE is withheld');
+      if (report.coverage.changedLinesCovered === true) {
+        expect(report.reason).toContain('SAFE is withheld');
+      }
     },
     240_000,
   );
