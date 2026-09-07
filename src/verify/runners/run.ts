@@ -51,17 +51,153 @@ const DENIED_ENV_EXACT = new Set([
   'ANTHROPIC_API_KEY',
 ]);
 
-/** Suffixes that mark a value as a credential regardless of vendor. The exact
- *  list above can never be complete, and a new vendor's token should not need a
- *  release here to be redacted. `_TOKEN` matches `VENDOR_TOKEN` but not
- *  `TOKENIZER_PATH`, because the match is on the whole trailing segment. */
+/** Legacy trailing-segment suffixes, kept as a cheap backstop under the broader
+ *  segment rule below. */
 const DENIED_ENV_SUFFIXES = ['_TOKEN', '_SECRET', '_API_KEY', '_PASSWORD', '_CREDENTIALS'];
 
+/** A NAME segment (the name split on `_`) that marks the whole variable as a
+ *  credential. SEGMENT match, not substring: it preserves `TOKENIZER` and
+ *  `SECRETARY` as non-secret while catching the advisory-B vectors the old suffix
+ *  list missed — `STRIPE_KEY` (`KEY`), `SESSION_COOKIE` (`SESSION`/`COOKIE`),
+ *  `MY_COMPANY_SECRET_VALUE` (`SECRET`, the `_VALUE` that ended the suffix). */
+const DENIED_NAME_SEGMENTS = new Set([
+  'SECRET',
+  'SECRETS',
+  'PASSWORD',
+  'PASSWD',
+  'PW',
+  'PWD',
+  'PASSPHRASE',
+  'TOKEN',
+  'KEY',
+  'APIKEY',
+  'PRIVATEKEY',
+  'SECRETKEY',
+  'ACCESSKEY',
+  'SIGNINGKEY',
+  'CREDENTIAL',
+  'CREDENTIALS',
+  'COOKIE',
+  'SESSION',
+  'AUTH',
+  'CERT',
+  'PEM',
+]);
+
+/** Unambiguous provider credential prefixes (matched at the value start). */
+const SECRET_VALUE_PREFIXES = [
+  'sk_',
+  'pk_live_',
+  'rk_',
+  'sk_live_',
+  'sk_test_',
+  'ghp_',
+  'gho_',
+  'ghu_',
+  'ghs_',
+  'ghr_',
+  'github_pat_',
+  'glpat-',
+  'xoxb-',
+  'xoxp-',
+  'xoxa-',
+  'xoxr-',
+  'xoxs-',
+  'dop_v1_',
+  'doo_v1_',
+  'dor_v1_',
+  'npm_',
+  'pypi-AgEI',
+  'shpat_',
+  'shpss_',
+  'SG.',
+  'hf_',
+  'ya29.',
+  'AIza',
+  'eyJ', // JWT/JWE header ({"alg…} base64) — a bearer/session credential
+  '$2a$', // bcrypt
+  '$2b$',
+  '$2y$',
+  '$argon2', // argon2
+];
+const AWS_KEY_RE = /^(AKIA|ASIA)[A-Z0-9]{16}$/;
+// A credential carried in a URL query string (?password=…, &token=…). The
+// conn-string rule only covers a user:pass@ authority; this covers the query form.
+const QUERY_CRED_RE = /[?&](password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)=[^&\s]/i;
+// scheme://…user:pass@… — a connection string carrying credentials. Fires ONLY on
+// an embedded user:pass authority, so a plain https URL with no creds is kept.
+const CONN_STRING_RE = /^[a-z][a-z0-9+.-]*:\/\/[^/@\s]*:[^/@\s]+@/i;
+
+function shannonBits(s: string): number {
+  const freq = new Map<string, number>();
+  for (const ch of s) freq.set(ch, (freq.get(ch) ?? 0) + 1);
+  let h = 0;
+  for (const c of freq.values()) {
+    const p = c / s.length;
+    h -= p * Math.log2(p);
+  }
+  return h;
+}
+
+/** True if the VALUE looks like a credential regardless of its name — the axis an
+ *  attacker cannot rename around (the repo's real Stripe key looks like one
+ *  however it is named). */
+function valueLooksLikeSecret(v: string): boolean {
+  const s = v.trim();
+  if (!s) return false;
+  if (SECRET_VALUE_PREFIXES.some((p) => s.startsWith(p))) return true;
+  if (AWS_KEY_RE.test(s)) return true;
+  if (CONN_STRING_RE.test(s)) return true;
+  if (QUERY_CRED_RE.test(s)) return true;
+  if (s.includes('-----BEGIN')) return true;
+  // High-entropy opaque blob: one wordless token, base64url/hex charset, length
+  // >=32 and Shannon entropy >= 4.0 bits/char. The no-`[\s/:]` guard excludes PATH,
+  // LS_COLORS, URLs and prose; the conn-string rule already owns `:`-bearing values.
+  if (s.length >= 32 && !/[\s/:]/.test(s) && /^[A-Za-z0-9+/=_-]+$/.test(s) && shannonBits(s) >= 4.0)
+    return true;
+  // Standard base64 (RFC-4648, with `/`) that the guard above excludes — a
+  // base64-encoded key/blob. A higher entropy floor (4.5) keeps `/`-bearing PATHs
+  // and dictionary paths (entropy < ~4.1) out while catching real base64 secrets
+  // (entropy ~5-6).
+  if (/^[A-Za-z0-9+/]{40,}={0,2}$/.test(s) && shannonBits(s) >= 4.5) return true;
+  return false;
+}
+
+function nameLooksLikeSecret(key: string): boolean {
+  if (DENIED_ENV_EXACT.has(key)) return true;
+  if (DENIED_ENV_SUFFIXES.some((suffix) => key.endsWith(suffix))) return true;
+  for (const seg of key.toUpperCase().split('_')) if (DENIED_NAME_SEGMENTS.has(seg)) return true;
+  return false;
+}
+
+/** Strip credentials from `env` before it reaches the verified suite. Matched
+ *  three ways: the exact denylist, per-segment credential words in the NAME, and
+ *  credential SHAPES in the VALUE (ADR-20). Fail-safe: a false positive only
+ *  WITHHOLDS a variable, which can move a verdict toward UNPROVEN/UNSAFE but never
+ *  toward a false SAFE, so imperfect matching is acceptable here in a way an
+ *  undecidable verdict boundary would not be. `REFACTRON_FORWARD_ENV` (comma-
+ *  separated names in the parent env) is the operator's opt-in un-redact hatch for
+ *  a var they know is a non-secret; it is trusted on the same basis as the secrets
+ *  themselves (it lives in the CI env, not the diff) and is never forwarded itself.
+ *  Best-effort, NOT a sandbox (SECURITY.md): a value that is BOTH benignly named
+ *  and benign-valued is undetectable — do not scope this env to hold secrets a
+ *  verification run does not need. */
 export function redactEnvForRunner(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
+  const forward = new Set(
+    (env.REFACTRON_FORWARD_ENV ?? '')
+      .split(',')
+      .map((n) => n.trim())
+      .filter(Boolean),
+  );
   const out: Record<string, string | undefined> = {};
   for (const [key, value] of Object.entries(env)) {
-    if (DENIED_ENV_EXACT.has(key)) continue;
-    if (DENIED_ENV_SUFFIXES.some((suffix) => key.endsWith(suffix))) continue;
+    if (key === 'REFACTRON_FORWARD_ENV') continue;
+    if (forward.has(key)) {
+      out[key] = value;
+      continue;
+    }
+    if (nameLooksLikeSecret(key)) continue;
+    if (typeof value === 'string' && valueLooksLikeSecret(value)) continue;
     out[key] = value;
   }
   return out;
