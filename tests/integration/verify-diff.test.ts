@@ -1049,6 +1049,11 @@ describe('verifyDiff (python three-way, real coverage)', () => {
       const root = await flakyFixture();
       const salt = `refactron-vd-flake-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       process.env.REFACTRON_FLAKE_SALT = salt;
+      // The salt is a high-entropy value, so value-aware redaction (ADR-20) strips
+      // it from the suite by default. This test var is a known non-secret, so we
+      // forward it explicitly via the operator escape hatch — the intended remedy.
+      const savedFwd = process.env.REFACTRON_FORWARD_ENV;
+      process.env.REFACTRON_FORWARD_ENV = 'REFACTRON_FLAKE_SALT';
       try {
         const report = await verifyDiff({
           repoRoot: root,
@@ -1066,6 +1071,8 @@ describe('verifyDiff (python three-way, real coverage)', () => {
       } finally {
         await fs.rm(path.join(os.tmpdir(), salt), { force: true });
         delete process.env.REFACTRON_FLAKE_SALT;
+        if (savedFwd === undefined) delete process.env.REFACTRON_FORWARD_ENV;
+        else process.env.REFACTRON_FORWARD_ENV = savedFwd;
       }
     },
     180_000,
