@@ -7,6 +7,7 @@ import {
 import type { VerificationResult } from '../../../src/contracts.js';
 import type { TestScopeAssessment } from '../../../src/verify/test-scope.js';
 import type { MutationResult } from '../../../src/verify/mutation.js';
+import type { WeakenedTest } from '../../../src/verify/test-weakening.js';
 import type { StabilityResult } from '../../../src/verify/stability.js';
 
 const ok = { passed: true, durationMs: 1 };
@@ -53,8 +54,9 @@ function fuse(
   mutation?: MutationResult,
   stability?: StabilityResult,
   trusted: boolean = true,
+  testWeakening: WeakenedTest[] = [],
 ) {
-  return fuseVerdict(result, changedFiles, cov, scope, trusted, mutation, stability);
+  return fuseVerdict(result, changedFiles, cov, scope, trusted, testWeakening, mutation, stability);
 }
 
 describe('fuseVerdict', () => {
@@ -117,6 +119,33 @@ describe('fuseVerdict', () => {
       expect(r.missingTests?.[0]?.file).toBe('a.py');
     });
   });
+
+  // Self-weakening test downgrade (#163): a would-be-SAFE whose diff relaxed the
+  // tests that judge it is withheld, even for a trusted author.
+  describe('self-weakening test downgrade', () => {
+    const weakened = [{ file: 'tests/test_x.py', reasons: ['1 assertion(s) removed'] }];
+    it('a trusted would-be-SAFE whose diff weakened its tests floors to UNPROVEN', () => {
+      const r = fuse(
+        result(true),
+        ['a.py'],
+        covered,
+        FULL_SCOPE,
+        undefined,
+        undefined,
+        true,
+        weakened,
+      );
+      expect(r.verdict).toBe('UNPROVEN');
+      expect(r.reason).toContain('weakened the tests');
+      expect(r.testWeakening?.[0]?.file).toBe('tests/test_x.py');
+    });
+    it('the same evidence with no weakening stays SAFE', () => {
+      const r = fuse(result(true), ['a.py'], covered, FULL_SCOPE, undefined, undefined, true, []);
+      expect(r.verdict).toBe('SAFE');
+      expect(r.testWeakening).toBeUndefined();
+    });
+  });
+
   it('tests pass + changed lines uncovered → UNPROVEN with missingTests', () => {
     const r = fuse(result(true), ['a.py'], uncovered);
     expect(r.verdict).toBe('UNPROVEN');

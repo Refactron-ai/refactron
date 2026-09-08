@@ -80,8 +80,12 @@ function isInsideRepo(rel: string): boolean {
  *
  *  Resolves the deepest ancestor that actually exists, because a file the diff
  *  CREATES has no realpath of its own while every directory it would be created
- *  through does - and an escaping directory is the whole attack. */
-async function resolvesInsideRepo(repoRoot: string, rel: string): Promise<boolean> {
+ *  through does - and an escaping directory is the whole attack.
+ *
+ *  Exported so the direct-`edits` intake (verify-diff.ts, #163 pre-diff test
+ *  read) can enforce the SAME symlink-aware boundary the unified-diff intake
+ *  does, rather than reading an attacker-shaped path with a lexical check only. */
+export async function resolvesInsideRepo(repoRoot: string, rel: string): Promise<boolean> {
   let root: string;
   try {
     root = await fs.realpath(repoRoot);
