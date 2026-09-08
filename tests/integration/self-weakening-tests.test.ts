@@ -65,7 +65,14 @@ describe('a diff that weakens its own covering test cannot earn SAFE (#163)', ()
         testCmd: 'python3 -m pytest -q',
       });
       // Red on main (trusted): covered + green + trusted => SAFE on the gutted test.
-      expect(report.verdict).not.toBe('SAFE');
+      // Pin UNPROVEN + the weakening reason + disclosure, AND changedLinesCovered ===
+      // true — the load-bearing line: it proves the downgrade came from the WEAKENING
+      // detector, not from an incidental coverage gap (which also yields UNPROVEN), so
+      // a silent detector regression can't pass this test green.
+      expect(report.verdict).toBe('UNPROVEN');
+      expect(report.reason).toContain('weakened the tests');
+      expect(report.testWeakening?.[0]?.file).toContain('test_calc.py');
+      expect(report.coverage.changedLinesCovered).toBe(true);
     },
     180_000,
   );
