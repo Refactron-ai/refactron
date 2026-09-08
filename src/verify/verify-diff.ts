@@ -16,7 +16,7 @@ import {
   type CoverageAssessment,
   type VerdictReport,
 } from './verdict-fuse.js';
-import { detectTestWeakening } from './test-weakening.js';
+import { detectTestWeakening, type WeakenedTest } from './test-weakening.js';
 import {
   assessTestScope,
   configsDeclareTestpaths,
@@ -27,7 +27,12 @@ import {
 } from './test-scope.js';
 import { detectRunner } from './runners/detect.js';
 import { ENGINE_VERSION } from '../engine-version.js';
-import { changedLinesForEdits, editsFromUnifiedDiff, type FileEdit } from './diff-input.js';
+import {
+  changedLinesForEdits,
+  editsFromUnifiedDiff,
+  resolvesInsideRepo,
+  type FileEdit,
+} from './diff-input.js';
 import { runMutation, type MutationResult } from './mutation.js';
 import { runStabilityCheck, type StabilityResult } from './stability.js';
 import type { FileChange, RefactorPlan, TransformId } from '../contracts.js';
@@ -72,6 +77,59 @@ function toChanges(repoRoot: string, edits: FileEdit[]): FileChange[] {
   }));
 }
 
+/** Classify which changed test files the diff WEAKENED (#163), reading each one's
+ *  PRE-diff content from the base tree. Every uncertainty fails SAFE-ward:
+ *
+ *   - A path that escapes the repository (`../`, absolute, or through a planted
+ *     symlink) is refused BEFORE the read, using the same symlink-aware boundary
+ *     the unified-diff intake enforces — an unguarded `readFile` here is a
+ *     content-disclosure oracle (diff-input.ts). The escaping edit is recorded as
+ *     unverifiable weakening; the shadow tree rejects it downstream regardless.
+ *   - A genuinely-absent base file (ENOENT) is a NEW test → pure strengthening,
+ *     skipped.
+ *   - ANY other read failure (EACCES, EISDIR, EIO, ...) must NOT be read as "no
+ *     weakening": that would let a diff that gutted a real test ride a trusted
+ *     SAFE. It is recorded so the verdict degrades to UNPROVEN.
+ *
+ *  Exported for direct unit testing of these fail-safe branches without a Python
+ *  suite. */
+export async function detectWeakenedTests(
+  repoRoot: string,
+  edits: FileEdit[],
+): Promise<WeakenedTest[]> {
+  const inputs: Array<{ file: string; oldContent: string; newContent: string }> = [];
+  const failures: WeakenedTest[] = [];
+  await Promise.all(
+    edits
+      .filter((e) => isTestFile(e.path))
+      .map(async (e) => {
+        if (!(await resolvesInsideRepo(repoRoot, e.path))) {
+          failures.push({
+            file: e.path,
+            reasons: [
+              'edit path escapes the repository, so the pre-diff tests cannot be read to confirm they were not weakened',
+            ],
+          });
+          return;
+        }
+        try {
+          const oldContent = await fs.readFile(path.resolve(repoRoot, e.path), 'utf8');
+          inputs.push({ file: e.path, oldContent, newContent: e.newContent });
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code === 'ENOENT') return; // newly-added test file: nothing to weaken
+          failures.push({
+            file: e.path,
+            reasons: [
+              `could not read pre-diff test content (${code ?? 'read error'}), so it cannot be confirmed the tests were not weakened`,
+            ],
+          });
+        }
+      }),
+  );
+  return [...detectTestWeakening(inputs), ...failures];
+}
+
 // The caller passes ONE full shell command. RefactronVerifier runs it verbatim
 // via `sh -c`; reportCoverage decides for itself how to wrap it for `coverage
 // run` (see toCoverageRunArgs). This module deliberately does no pre-mangling:
@@ -88,23 +146,9 @@ export async function verifyDiff(input: VerifyDiffInput): Promise<VerdictReport>
   const changedFiles = edits.map((e) => e.path);
 
   // #163: which changed test files did the diff WEAKEN (assertions removed, tests
-  // deleted, skips added)? Read the pre-diff content from the base tree and compare
-  // to the edit. A would-be-SAFE resting on tests the same diff relaxed is withheld
-  // in fuseVerdict. A missing base file (a newly-added test) reads as empty → never
-  // weakening.
-  const testWeakening = detectTestWeakening(
-    await Promise.all(
-      edits
-        .filter((e) => isTestFile(e.path))
-        .map(async (e) => ({
-          file: e.path,
-          oldContent: await fs
-            .readFile(path.resolve(input.repoRoot, e.path), 'utf8')
-            .catch(() => ''),
-          newContent: e.newContent,
-        })),
-    ),
-  );
+  // deleted, skips added)? A would-be-SAFE resting on tests the same diff relaxed
+  // is withheld in fuseVerdict.
+  const testWeakening = await detectWeakenedTests(input.repoRoot, edits);
 
   // 1. Gates (pass/fail) — the existing verifier manages its own shadow tree.
   const verifier = new RefactronVerifier({
@@ -123,7 +167,13 @@ export async function verifyDiff(input: VerifyDiffInput): Promise<VerdictReport>
   // signal is the other half).
   const testScope = await resolveTestScope(input);
   const flaky = (result.gates.tests as { flakySuspects?: unknown[] }).flakySuspects?.length ?? 0;
-  const wouldBeSafe = result.passed && flaky === 0 && testScope.scope !== 'narrowed';
+  // testWeakening also floors the verdict to UNPROVEN in fuseVerdict, so a weakened
+  // diff can never reach SAFE — the deep checks (mutation/flaky) below only ever
+  // downgrade, and running them on an already-floored verdict burns minutes for a
+  // decided answer. The fuseVerdict guard remains the actual verdict gate; this
+  // only skips the wasted work.
+  const wouldBeSafe =
+    result.passed && flaky === 0 && testScope.scope !== 'narrowed' && testWeakening.length === 0;
 
   // 2. Coverage (only when gates pass; Python only), and the opt-in deep checks
   // alongside it (mutation, stability) when requested and the change could still
