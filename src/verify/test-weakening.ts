@@ -16,11 +16,27 @@ export interface WeakenedTest {
   reasons: string[];
 }
 
-/** pytest bare `assert` (line-anchored, so `assert` inside a string/comment is not
- *  counted) plus unittest `self.assertX(...)` / `self.fail(`. */
-function assertCount(src: string): number {
-  const pytest = src.match(/^[ \t]*assert\b/gm)?.length ?? 0;
-  const unittest = src.match(/\bself\.(assert\w+|fail)\s*\(/g)?.length ?? 0;
+/** Remove triple-quoted strings (docstrings), single-line strings, and `#`
+ *  comments before counting. Without this, an `assert`-line parked inside a new
+ *  docstring is counted as an assertion, so removing the REAL assertion nets zero
+ *  and the weakening goes undetected (a ~2-line false-negative). Triple-quoted
+ *  first, since it contains single quotes. Heuristic (nested quotes/escapes are
+ *  imperfect), but it closes the docstring-mask evasion. */
+function stripStringsAndComments(src: string): string {
+  return src
+    .replace(/"""[\s\S]*?"""/g, '')
+    .replace(/'''[\s\S]*?'''/g, '')
+    .replace(/"(?:[^"\\]|\\.)*"/g, '')
+    .replace(/'(?:[^'\\]|\\.)*'/g, '')
+    .replace(/#.*$/gm, '');
+}
+
+/** pytest bare `assert` (line-anchored) plus unittest `self.assertX(...)` /
+ *  `self.fail(`. Operates on already-stripped source (see stripStringsAndComments)
+ *  so an `assert` inside a docstring or string does not count. */
+function assertCount(stripped: string): number {
+  const pytest = stripped.match(/^[ \t]*assert\b/gm)?.length ?? 0;
+  const unittest = stripped.match(/\bself\.(assert\w+|fail)\s*\(/g)?.length ?? 0;
   return pytest + unittest;
 }
 
@@ -51,19 +67,23 @@ export function detectTestWeakening(
   for (const { file, oldContent, newContent } of changes) {
     if (!oldContent) continue; // added test file — strengthening, never weakening
     const reasons: string[] = [];
+    // Strip strings/comments once so a docstring-parked assert can't mask a real
+    // one, then run every count on the stripped source.
+    const oldSrc = stripStringsAndComments(oldContent);
+    const newSrc = stripStringsAndComments(newContent);
 
-    const oldA = assertCount(oldContent);
-    const newA = assertCount(newContent);
+    const oldA = assertCount(oldSrc);
+    const newA = assertCount(newSrc);
     if (newA < oldA) reasons.push(`${oldA - newA} assertion(s) removed`);
 
-    const oldNames = testFnNames(oldContent);
-    const newNames = testFnNames(newContent);
+    const oldNames = testFnNames(oldSrc);
+    const newNames = testFnNames(newSrc);
     const deleted = [...oldNames].filter((n) => !newNames.has(n));
     if (deleted.length > 0)
       reasons.push(`test(s) deleted or renamed: ${deleted.slice(0, 5).join(', ')}`);
 
-    const oldSkips = skipCount(oldContent);
-    const newSkips = skipCount(newContent);
+    const oldSkips = skipCount(oldSrc);
+    const newSkips = skipCount(newSrc);
     if (newSkips > oldSkips) reasons.push(`${newSkips - oldSkips} skip/xfail marker(s) added`);
 
     if (reasons.length > 0) out.push({ file, reasons });
