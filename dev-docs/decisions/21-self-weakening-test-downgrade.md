@@ -62,9 +62,22 @@ Every evasion below is a **degrade-miss**: it leaves the pre-#163 verdict (alrea
 `SAFE`), so it introduces **no new false SAFE** — the feature catches the common
 and lazy cases and misses the deliberate ones.
 
-- **Closed:** an `assert` line parked inside a docstring/string no longer masks a
-  removed real assertion (strings are stripped before counting).
-- **Out of scope, tracked as follow-ups:**
+- **Closed:**
+  - an `assert` line parked inside a docstring/string no longer masks a removed
+    real assertion (strings are stripped before counting);
+  - `async def test_*` functions are tracked, so deleting or renaming an
+    (pytest-asyncio/anyio) async test is caught (CodeRabbit, PR #166);
+  - a compound `foo(); assert x` counts the inline assertion at the `;` boundary,
+    so removing it does not net zero (CodeRabbit, PR #166).
+- **Intake fail-safe (CodeRabbit, PR #166).** The pre-diff read of the base test
+  file (`detectWeakenedTests`) fails SAFE-ward on every uncertainty: a non-ENOENT
+  read error (EACCES/EISDIR/EIO) and a repo-escaping edit path are BOTH recorded as
+  weakening (→ downgrade), never swallowed as "no weakening" — the latter would let
+  a gutted test ride a trusted `SAFE`. Escaping paths are refused with the same
+  symlink-aware boundary the unified-diff intake uses, before any read, so the read
+  cannot become a content-disclosure oracle. Deep checks (mutation/flaky) are also
+  skipped once weakening is present, since the verdict is already floored.
+- **Out of scope, tracked as follow-ups (#164 recall, #165 precision):**
   - **Count-preserving compensation** — remove the covering assertion, pad an
     unrelated test in the same file. The file-global count nets zero. Needs
     per-test (per-function or coverage-linked) counting.
@@ -105,5 +118,7 @@ diff that removes its covering assertion is `SAFE` on `main` under `--trusted`,
 `UNPROVEN` after (pinned with the reason + `testWeakening` + `changedLinesCovered
 === true` so a coverage-gap UNPROVEN can't pass it green). Unit:
 `tests/unit/verify/test-weakening.test.ts` (removed assert, deleted/renamed test,
-each skip/xfail family, `self.fail`, docstring-mask, and the known-negatives) and
-the `verdict-fuse.test.ts` downgrade both directions.
+async rename, inline `; assert`, each skip/xfail family, `self.fail`, docstring-mask,
+and the known-negatives), `tests/unit/verify/detect-weakened-tests.test.ts` (the
+intake fail-safe: read-error → weakening, escaping path → refused, ENOENT → new
+file), and the `verdict-fuse.test.ts` downgrade both directions.
