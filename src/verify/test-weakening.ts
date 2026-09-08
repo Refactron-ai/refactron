@@ -31,19 +31,24 @@ function stripStringsAndComments(src: string): string {
     .replace(/#.*$/gm, '');
 }
 
-/** pytest bare `assert` (line-anchored) plus unittest `self.assertX(...)` /
- *  `self.fail(`. Operates on already-stripped source (see stripStringsAndComments)
- *  so an `assert` inside a docstring or string does not count. */
+/** pytest bare `assert` plus unittest `self.assertX(...)` / `self.fail(`. Counts a
+ *  bare `assert` at a statement boundary — line start OR after a `;` — so a
+ *  compound `foo(); assert x` is not missed (removing it would otherwise net zero).
+ *  Operates on already-stripped source (see stripStringsAndComments) so an `assert`
+ *  inside a docstring or string does not count. `self.assertX` is already position-
+ *  independent via `\b`, so inline unittest asserts count too. */
 function assertCount(stripped: string): number {
-  const pytest = stripped.match(/^[ \t]*assert\b/gm)?.length ?? 0;
+  const pytest = stripped.match(/(?:^|;)[ \t]*assert\b/gm)?.length ?? 0;
   const unittest = stripped.match(/\bself\.(assert\w+|fail)\s*\(/g)?.length ?? 0;
   return pytest + unittest;
 }
 
-/** Names of `def test_*` / `def test*` functions (and unittest test methods). */
+/** Names of `def test_*` / `async def test_*` functions (and unittest test
+ *  methods). Async is matched too: pytest-asyncio/anyio tests are `async def`,
+ *  and without this an async test's deletion or rename would go unseen. */
 function testFnNames(src: string): Set<string> {
   const out = new Set<string>();
-  for (const m of src.matchAll(/^[ \t]*def\s+(test\w*)\s*\(/gm)) out.add(m[1]!);
+  for (const m of src.matchAll(/^[ \t]*(?:async\s+)?def\s+(test\w*)\s*\(/gm)) out.add(m[1]!);
   return out;
 }
 
