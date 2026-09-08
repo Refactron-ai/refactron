@@ -309,12 +309,13 @@ describe('attributeChangedLines (AST statement containment)', () => {
     expect(out.uncovered).toEqual([]);
   });
 
-  // ADR-11: coverage.py EXCLUDES `# pragma: no cover` and `if TYPE_CHECKING:`
-  // statements, which can never be executed by any test. Counting them in the
-  // denominator would make SAFE unreachable for any diff that adds a
-  // typing-only import block, so they are subtracted from it.
-  describe('excluded statements are subtracted from the denominator', () => {
-    it('an otherwise fully covered change is still covered', () => {
+  // ADR-18 (supersedes ADR-11's subtraction). coverage.py EXCLUDES `# pragma: no
+  // cover`, config `exclude_lines`, and `if TYPE_CHECKING:` blocks. The exclusion
+  // is attacker-controllable in the diff under verification (GHSA-9xch-4mch-222g),
+  // so an excluded CHANGED statement is not proof — it floors the file to
+  // UNPROVEN rather than clearing it.
+  describe('an excluded changed statement floors the file (ADR-18)', () => {
+    it('floors the file even when every other changed statement is covered', () => {
       const out = attributeChangedLines({
         ranges: ranges({ path: 'pkg/mod.py', lines: [10, 30] }),
         coveredLines: cov('pkg/mod.py:10'),
@@ -326,16 +327,17 @@ describe('attributeChangedLines (AST statement containment)', () => {
         }),
         excludedLines: new Map([['pkg/mod.py', new Set([30])]]),
       });
-      expect(out.changedLinesCovered).toBe(true);
-      // Still disclosed, tagged, and still in the report: subtracting it from
-      // the denominator is not the same as pretending it was proven.
+      // The security fix: a diff-controlled exclusion cannot clear the verdict.
+      expect(out.changedLinesCovered).toBe(false);
+      expect(out.excludedChangedStatements).toBe(1);
+      // Still disclosed and tagged.
       expect(out.uncovered).toEqual([{ file: 'pkg/mod.py', line: 30, excluded: true }]);
       expect(out.changedStatements).toEqual({ total: 2, covered: 1 });
     });
 
     it('a change that is ENTIRELY excluded is not covered', () => {
-      // Denominator zero. `0 === 0` would issue SAFE on a change no test can
-      // reach, which is the opposite of proven.
+      // Every changed statement excluded => covered (0) < statements (1) => not
+      // proven. Issuing SAFE here would clear a change no test can reach.
       const out = attributeChangedLines({
         ranges: ranges({ path: 'pkg/mod.py', lines: [30] }),
         coveredLines: cov(),

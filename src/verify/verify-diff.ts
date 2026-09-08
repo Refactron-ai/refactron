@@ -39,6 +39,14 @@ export interface VerifyDiffInput {
   // suite is rerun under varied conditions and a test whose outcome varies
   // downgrades SAFE to UNPROVEN. Never strengthens.
   flakyCheck?: boolean;
+  // Whether the DIFF AUTHOR is trusted (ADR-19). Default false — the safe
+  // default, because coverage/pass-fail are measured by running the diff's own
+  // suite in-process, which a hostile diff can forge (GHSA Finding 1). When
+  // false, a would-be-SAFE floors to UNPROVEN. Set true ONLY for a diff whose
+  // author you trust (self/dev use); it restores SAFE by trusting the in-process
+  // measurement. It is never inferred from the diff — the diff is the untrusted
+  // input — so it must be asserted by the operator.
+  trusted?: boolean;
 }
 
 // Inert at verify time (keystone spike: transformId/oldHash are never read).
@@ -115,7 +123,15 @@ export async function verifyDiff(input: VerifyDiffInput): Promise<VerdictReport>
   // engineVersion is stamped HERE rather than inside fuseVerdict, which
   // documents itself as pure with no I/O. This is already the I/O layer.
   return {
-    ...fuseVerdict(result, changedFiles, cov, testScope, mutation, stability),
+    ...fuseVerdict(
+      result,
+      changedFiles,
+      cov,
+      testScope,
+      input.trusted === true,
+      mutation,
+      stability,
+    ),
     engineVersion: ENGINE_VERSION,
   };
 }

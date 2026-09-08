@@ -1,8 +1,15 @@
 # ADR-11: SAFE requires every coverable changed statement to have executed
 
-> Status: **Accepted**
+> Status: **Accepted** (superseded in part by [ADR-18](18-excluded-changed-statement-floors.md))
 > Date: 2026-08-17
 > Deciders: @omsherikar
+>
+> **Superseded in part (2026-09-06, ADR-18, GHSA-9xch-4mch-222g):** the
+> "coverable = statements − excluded" subtraction below is attacker-controllable
+> (a diff can add `# pragma: no cover` / a coveragerc regex to a changed
+> statement). ADR-18 removes the subtraction: an excluded CHANGED statement now
+> floors to UNPROVEN. The per-statement, per-file rule this ADR established stands;
+> only the treatment of excluded changed statements changed.
 
 ## Context
 

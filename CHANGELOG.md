@@ -7,7 +7,51 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased]
+## [0.4.6] - 2026-09-07
+
+### Security - a coverage-based `SAFE` on an untrusted diff was forgeable (BREAKING DEFAULT)
+
+Refactron measured coverage and the pass/fail gates by running the diff's OWN
+test suite in the same process as the measurement, so a hostile diff controlled
+the evidence. A ~6-line `conftest.py` (public coverage API,
+`Coverage.current().get_data().add_arcs`) marked a never-executed changed line as
+covered and earned a false `SAFE` for an untested change. Reproduced end-to-end;
+present in 0.3.1-0.4.5. A false `SAFE` is the one defect this tool exists to
+prevent, so the fix changes a default.
+
+**A would-be-`SAFE` is now WITHHELD to `UNPROVEN` for an UNTRUSTED diff, which is
+the default.** No launcher can stop in-process tampering (the attacker owns the
+process), so Refactron stops trusting the forgeable measurement rather than trying
+to detect the forgery. Trust is asserted by the operator, never inferred from the
+diff:
+
+- CLI: pass `--trusted` for a diff whose author you trust (self/dev use).
+- MCP / library: `trusted: true` (default `false`).
+
+`UNSAFE` is unchanged. Every report now carries `trustMode: 'trusted' |
+'untrusted'`, and a withheld verdict's `reason` begins "SAFE is withheld", so a
+consumer can tell a trust withhold from a real coverage gap. A trust-grade `SAFE`
+over an untrusted diff will require a hermetic (out-of-process) run. (ADR-19)
+
+**Upgrade note.** If you rely on a coverage-based `SAFE` for diffs you author
+yourself, add `--trusted` (or `trusted: true`) to keep it. If you verify untrusted
+PRs in CI, the default is now the correct one: those verdicts degrade to
+`UNPROVEN` instead of a forgeable `SAFE`. Exit codes are unchanged (`UNPROVEN` and
+`SAFE` both exit 0).
+
+Also hardened:
+
+- Coverage-driver isolation — a repo-root `coverage.py` can no longer shadow the
+  driver (ADR-17). Defense-in-depth for the trusted path.
+- Excluded-statement floor — a changed statement the diff excludes from coverage
+  (`# pragma: no cover`, a coverage config) now floors the verdict instead of
+  being subtracted (ADR-18). Trusted-path defense.
+- Credential redaction to the verified suite is strengthened from a name denylist
+  to segment-name plus value-shape matching — token prefixes, `user:pass@`
+  connection strings, PEM blocks, high-entropy blobs — closing
+  GHSA-7gr9-rqqx-xg6m. `REFACTRON_FORWARD_ENV` re-admits a var an operator knows is
+  a non-secret; redaction stays best-effort, not a sandbox (ADR-20).
+
 
 ### Added — `--flaky-check`, an opt-in stability check
 

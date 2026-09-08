@@ -19,11 +19,13 @@ Refactron applies the diff in an isolated shadow tree, runs the syntax, imports,
 
 | Verdict    | Meaning                                                                              | Exit |
 | ---------- | ------------------------------------------------------------------------------------ | ---- |
-| `SAFE`     | Every gate passed **and** your tests exercised every coverable changed statement.    | `0`  |
+| `SAFE`     | Every gate passed, your tests exercised every changed statement (none excluded, no untaken branch), and the diff's author is trusted. | `0`  |
 | `UNSAFE`   | A gate failed: the change broke something.                                           | `1`  |
 | `UNPROVEN` | Tests pass, but the changed code isn't exercised (or coverage couldn't be assessed). | `0`  |
 
 `UNPROVEN` is the honest verdict. "Tests pass" is not the same as "this change is proven safe": if nothing runs the lines you changed, a green suite proves nothing about them. Refactron says so out loud and tells you which test to add. See [Verdicts](/verification/verdicts) for the full model.
+
+By default the diff's author is **untrusted**, so a would-be-`SAFE` is withheld and returns `UNPROVEN`. Coverage and the pass/fail gates are measured by running the diff's own suite in-process, which an untrusted diff can forge, so `SAFE` is granted only when you pass `--trusted` (or run the change hermetically). Set `--trusted` only for a change whose author you already trust, never for an external or agent-authored diff. See [An untrusted diff cannot be SAFE](/verification/verdicts#an-untrusted-diff-cannot-be-safe).
 
 <Warning>
   Coverage is **Python-only** (via `coverage.py`). A TypeScript or mixed-language diff can never
@@ -106,6 +108,7 @@ Output is the verdict, its reason, and (for `UNPROVEN` by lack of coverage) the 
 | `--test-cmd <cmd>` | string | auto-detect | Override the test command (e.g. `"python3 -m pytest -q"`). Drives both the test gate and the coverage run.                                                                                                                                                        |
 | `--mutate`         | bool   | false       | Deep check (Python, slower): mutate the changed statements and rerun the suite; a surviving mutant caps the verdict at `UNPROVEN`. Downgrade-only. See [Verdicts](/verification/verdicts#mutate-was-the-change-actually-asserted).                                |
 | `--flaky-check`    | bool   | false       | Deep check (Python, slower): rerun a would-be-`SAFE` suite K times under a varied `PYTHONHASHSEED`; a test whose outcome varies caps the verdict at `UNPROVEN`. Downgrade-only. See [Verdicts](/verification/verdicts#flaky-check-was-the-green-stable-or-lucky). |
+| `--trusted`        | bool   | false       | Trust the diff's **author**. Without it a would-be-`SAFE` is withheld and returns `UNPROVEN`, because coverage is measured by running the diff's own suite in-process, which an untrusted diff can forge. Set it only for a change whose author you trust, never for an external or agent-authored diff.                     |
 | `--json`           | bool   | false       | Emit the full report as JSON instead of the one-line verdict.                                                                                                                                                                                                     |
 
 ### Exit codes
@@ -151,6 +154,7 @@ This is a note, not a verdict change. A green verdict on a diff that also weaken
   "reportVersion": 1,
   "engineVersion": "0.4.0",
   "verdict": "UNPROVEN",
+  "trustMode": "untrusted",
   "gates": {
     "syntax": { "passed": true, "durationMs": 12 },
     "imports": { "passed": true, "durationMs": 9 },
@@ -172,11 +176,12 @@ This is a note, not a verdict change. A green verdict on a diff that also weaken
 ```
 
 - `reportVersion`: schema version of this report. The shape below is a public contract; the version tells a consumer that stores reports which shape it is holding.
-- `engineVersion`: the version of Refactron that produced this report. The two are not interchangeable and you will want both if you keep reports as history. `reportVersion` says which **shape** you are holding. `engineVersion` says which **rules** produced the verdict, which matters because what earns a `SAFE` has changed without the shape changing: 0.4.1 stopped a narrowed `--test-cmd` from earning `SAFE`, and started requiring every coverable changed statement to have run. Absent on reports written before 0.4.1.
+- `engineVersion`: the version of Refactron that produced this report. The two are not interchangeable and you will want both if you keep reports as history. `reportVersion` says which **shape** you are holding. `engineVersion` says which **rules** produced the verdict, which matters because what earns a `SAFE` has changed without the shape changing: 0.4.1 stopped a narrowed `--test-cmd` from earning `SAFE`, and started requiring every changed statement to have run. Absent on reports written before 0.4.1.
+- `trustMode`: `"trusted"` or `"untrusted"`, the regime that produced this verdict. A would-be-`SAFE` over an untrusted diff is withheld and returned as `UNPROVEN` (its `reason` contains "SAFE is withheld"), because the in-process measurement is forgeable; `trustMode` lets a consumer tell that trust withhold from a real coverage gap. Set the regime with `--trusted`.
 - `gates`: each gate's `passed` flag and wall-clock. A failed gate also carries a `blockingReason`.
 - `testFilesChanged`: changed files matching test conventions. A note that the diff touched tests, never a verdict input.
 - `coverage.tool`: `coverage.py` when coverage was assessed, `none` when it couldn't be (non-Python diff, or no `coverage.py` installed).
-- `coverage.uncovered`: one entry per unexercised **statement**, at the statement's first line, mapped from the changed line by AST containment. A multi-line statement reports once rather than once per wrapped line. Present on `SAFE` too: a `SAFE` can still carry statements coverage.py **excluded**, which no test could reach, and hiding them would make the verdict read stronger than it is. An entry marked `"excluded": true` sits in a `# pragma: no cover` or `if TYPE_CHECKING:` block that no test can reach.
+- `coverage.uncovered`: one entry per unexercised **statement**, at the statement's first line, mapped from the changed line by AST containment. A multi-line statement reports once rather than once per wrapped line. **Empty on `SAFE`**: a `SAFE` requires every changed statement to have run, so any entry here floors the verdict to `UNPROVEN`. An entry marked `"excluded": true` (a `# pragma: no cover` or `if TYPE_CHECKING:` block no test can reach) also floors it: the exclusion travels inside the diff, so it is not proof.
 - `coverage.changedStatements`: `{ total, covered }` across the whole diff, so you can read the ratio ("12 of 40 changed statements exercised") rather than only the boolean.
 - `coverage.filesWithUncovered`: distinct files with at least one uncovered statement, counted **before** the cap.
 - `coverage.inertOnlyFiles` / `coverage.removalOnlyFiles`: changed files with nothing for coverage to attest, because their added lines are all blank/comment lines, or because the file only had lines removed.

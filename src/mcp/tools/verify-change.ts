@@ -22,6 +22,12 @@ export const verifyChangeInputSchema = {
     .describe(
       'Override the test command. Must run the WHOLE suite: naming test paths or using -k/-m/-t/--onlyChanged/--collect-only caps the verdict at UNPROVEN. A PYTHONPATH= prefix is fine.',
     ),
+  trusted: z
+    .boolean()
+    .optional()
+    .describe(
+      'Set true ONLY if you trust the AUTHOR of this change. Default false: coverage is measured by running the diff’s own suite in-process, which a hostile diff can forge, so an untrusted would-be-SAFE is withheld and returns UNPROVEN. Never set true for an external/untrusted diff.',
+    ),
 };
 
 export interface VerifyChangeArgs {
@@ -29,6 +35,7 @@ export interface VerifyChangeArgs {
   edits?: Array<{ path: string; newContent: string }>;
   unifiedDiff?: string;
   testCmd?: string;
+  trusted?: boolean;
 }
 
 export async function handleVerifyChange(
@@ -40,6 +47,7 @@ export async function handleVerifyChange(
       ...(args.edits ? { edits: args.edits } : {}),
       ...(args.unifiedDiff ? { unifiedDiff: args.unifiedDiff } : {}),
       ...(args.testCmd ? { testCmd: args.testCmd } : {}),
+      ...(args.trusted === true ? { trusted: true } : {}),
     };
     const report = await verifyDiff(input);
     return { content: [{ type: 'text', text: JSON.stringify(report, null, 2) }] };

@@ -231,6 +231,7 @@ describe('SAFE requires every coverable changed statement (issue #109)', () => {
       const root = await partialFixture();
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         edits: [{ path: 'calc.py', newContent: PARTIAL_CHANGED }],
         testCmd: TEST_CMD,
       });
@@ -257,6 +258,7 @@ describe('SAFE requires every coverable changed statement (issue #109)', () => {
       const root = await partialFixture();
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         edits: [
           { path: 'calc.py', newContent: PARTIAL_BASE.replace('return x + 1', 'return x + 1 + 0') },
         ],
@@ -310,6 +312,7 @@ describe('an unparsed runner with arguments cannot earn SAFE (issue #115)', () =
     const root = await unittestFixture();
     return verifyDiff({
       repoRoot: root,
+      trusted: true,
       edits: [{ path: 'calc.py', newContent: SCALED }],
       testCmd,
     });
@@ -358,6 +361,7 @@ describe('a narrowed testCmd cannot earn SAFE (issue #110)', () => {
     roots.push(root);
     return verifyDiff({
       repoRoot: root,
+      trusted: true,
       edits: [{ path: 'calc.py', newContent: SCALED_CALC }],
       testCmd,
     });
@@ -412,6 +416,7 @@ describe('a narrowed testCmd cannot earn SAFE (issue #110)', () => {
       );
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         edits: [{ path: 'calc.py', newContent: 'LIMIT = 6\n\n\ndef limit():\n    return LIMIT\n' }],
         testCmd: 'python3 -m pytest -q --collect-only',
       });
@@ -458,6 +463,7 @@ describe('verifyDiff with a NAME=VALUE prefix on testCmd (issue #95)', () => {
       const root = await srcLayoutFixture();
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         edits: [{ path: 'src/pkg/__init__.py', newContent: REORDERED_PKG }],
         testCmd: 'PYTHONPATH=src python3 -m pytest -q',
       });
@@ -503,11 +509,13 @@ describe('verifyDiff with a NAME=VALUE prefix on testCmd (issue #95)', () => {
       // that matters and the one both paths deliver: never SAFE.
       const intoShadow = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         edits,
         testCmd: 'PYTHONPATH=src python3 -m pytest -q',
       });
       const intoOriginal = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         edits,
         testCmd: `PYTHONPATH=${posix(path.join(root, 'src'))} python3 -m pytest -q`,
       });
@@ -561,11 +569,13 @@ describe('verifyDiff with a NAME=VALUE prefix on testCmd (issue #95)', () => {
 
       const viaConsoleScript = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         edits,
         testCmd: `PYTHONPATH=${posix(root)} pytest -q`,
       });
       const viaModuleForm = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         edits,
         testCmd: 'python3 -m pytest -q',
       });
@@ -620,9 +630,15 @@ describe('verifyDiff with a NAME=VALUE prefix on testCmd (issue #95)', () => {
 
       process.env.PYTHONPATH = root;
       {
-        const report = await verifyDiff({ repoRoot: root, edits, testCmd: 'pytest -q' });
+        const report = await verifyDiff({
+          repoRoot: root,
+          trusted: true,
+          edits,
+          testCmd: 'pytest -q',
+        });
         const control = await verifyDiff({
           repoRoot: root,
+          trusted: true,
           edits,
           testCmd: 'python3 -m pytest -q',
         });
@@ -662,6 +678,7 @@ describe('verifyDiff (python three-way, real coverage)', () => {
     async () => {
       const report = await verifyDiff({
         repoRoot: FIXTURE,
+        trusted: true,
         edits: [
           {
             path: 'calc.py',
@@ -681,6 +698,7 @@ describe('verifyDiff (python three-way, real coverage)', () => {
     async () => {
       const report = await verifyDiff({
         repoRoot: FIXTURE,
+        trusted: true,
         edits: [
           {
             path: 'calc.py',
@@ -700,6 +718,7 @@ describe('verifyDiff (python three-way, real coverage)', () => {
     async () => {
       const report = await verifyDiff({
         repoRoot: FIXTURE,
+        trusted: true,
         edits: [
           {
             path: 'calc.py',
@@ -722,6 +741,7 @@ describe('verifyDiff (python three-way, real coverage)', () => {
     async () => {
       const report = await verifyDiff({
         repoRoot: FIXTURE,
+        trusted: true,
         edits: [
           {
             path: 'calc.py',
@@ -756,6 +776,7 @@ describe('verifyDiff (python three-way, real coverage)', () => {
       async () => {
         const report = await verifyDiff({
           repoRoot: MULTILINE,
+          trusted: true,
           edits: [
             {
               path: 'shapes.py',
@@ -782,6 +803,7 @@ describe('verifyDiff (python three-way, real coverage)', () => {
       async () => {
         const report = await verifyDiff({
           repoRoot: MULTILINE,
+          trusted: true,
           edits: [
             {
               path: 'shapes.py',
@@ -819,6 +841,7 @@ describe('verifyDiff (python three-way, real coverage)', () => {
       const PRAGMA = path.resolve(__dirname, '../fixtures/verify-diff-pragma');
       const report = await verifyDiff({
         repoRoot: PRAGMA,
+        trusted: true,
         edits: [
           {
             path: 'gated.py',
@@ -853,6 +876,7 @@ describe('verifyDiff (python three-way, real coverage)', () => {
       const TC = path.resolve(__dirname, '../fixtures/verify-diff-type-checking');
       const report = await verifyDiff({
         repoRoot: TC,
+        trusted: true,
         edits: [
           {
             path: 'mod.py',
@@ -893,6 +917,7 @@ describe('verifyDiff (python three-way, real coverage)', () => {
     async function runInert(newContent: string) {
       return verifyDiff({
         repoRoot: INERT,
+        trusted: true,
         edits: [{ path: 'mod.py', newContent }],
         testCmd: TEST_CMD,
       });
@@ -1024,9 +1049,15 @@ describe('verifyDiff (python three-way, real coverage)', () => {
       const root = await flakyFixture();
       const salt = `refactron-vd-flake-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       process.env.REFACTRON_FLAKE_SALT = salt;
+      // The salt is a high-entropy value, so value-aware redaction (ADR-20) strips
+      // it from the suite by default. This test var is a known non-secret, so we
+      // forward it explicitly via the operator escape hatch — the intended remedy.
+      const savedFwd = process.env.REFACTRON_FORWARD_ENV;
+      process.env.REFACTRON_FORWARD_ENV = 'REFACTRON_FLAKE_SALT';
       try {
         const report = await verifyDiff({
           repoRoot: root,
+          trusted: true,
           edits: [
             { path: 'lib.py', newContent: 'def add(a, b):\n    return a + b  # reordered\n' },
           ],
@@ -1040,6 +1071,8 @@ describe('verifyDiff (python three-way, real coverage)', () => {
       } finally {
         await fs.rm(path.join(os.tmpdir(), salt), { force: true });
         delete process.env.REFACTRON_FLAKE_SALT;
+        if (savedFwd === undefined) delete process.env.REFACTRON_FORWARD_ENV;
+        else process.env.REFACTRON_FORWARD_ENV = savedFwd;
       }
     },
     180_000,

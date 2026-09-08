@@ -67,6 +67,7 @@ describe('a surviving mutant downgrades SAFE under --mutate (#116)', () => {
       const root = await fixture('weak');
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         unifiedDiff: DIFF,
         testCmd: 'python3 -m pytest -q',
       });
@@ -81,6 +82,7 @@ describe('a surviving mutant downgrades SAFE under --mutate (#116)', () => {
       const root = await fixture('weak');
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         unifiedDiff: DIFF,
         testCmd: 'python3 -m pytest -q',
         mutate: true,
@@ -101,6 +103,7 @@ describe('a surviving mutant downgrades SAFE under --mutate (#116)', () => {
       const root = await fixture('strong');
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         unifiedDiff: DIFF,
         testCmd: 'python3 -m pytest -q',
         mutate: true,
@@ -143,6 +146,7 @@ describe('a surviving mutant downgrades SAFE under --mutate (#116)', () => {
       ].join('\n');
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         unifiedDiff: diff,
         testCmd: 'python3 -m pytest -q',
         mutate: true,
@@ -199,6 +203,7 @@ describe('a surviving constant mutant downgrades SAFE under --mutate (#149)', ()
       const root = await constFixture('weak');
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         unifiedDiff: CONST_DIFF,
         testCmd: 'python3 -m pytest -q',
       });
@@ -213,6 +218,7 @@ describe('a surviving constant mutant downgrades SAFE under --mutate (#149)', ()
       const root = await constFixture('weak');
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         unifiedDiff: CONST_DIFF,
         testCmd: 'python3 -m pytest -q',
         mutate: true,
@@ -247,6 +253,7 @@ describe('a surviving constant mutant downgrades SAFE under --mutate (#149)', ()
       ].join('\n');
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         unifiedDiff: diff,
         testCmd: 'python3 -m pytest -q',
         mutate: true,

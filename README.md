@@ -59,11 +59,13 @@ The CLI is then `node dist/cli/index.js <command>` and the MCP server is `node d
 
 | Verdict    | Meaning                                                                                              | Exit |
 | ---------- | ---------------------------------------------------------------------------------------------------- | ---- |
-| `SAFE`     | Every gate passed **and** your tests exercised every coverable changed statement. | `0`  |
+| `SAFE`     | Every gate passed, your tests exercised every changed statement (none excluded), and the diff's author is trusted. | `0`  |
 | `UNSAFE`   | A gate failed: the change broke something.                                                           | `1`  |
 | `UNPROVEN` | Tests pass, but the changed code isn't exercised (or coverage couldn't be assessed).                 | `0`  |
 
 `UNPROVEN` is the honest verdict. "Tests pass" is not "proven safe": if nothing runs the lines you changed, a green suite proves nothing about them. Refactron says so, and (for Python) names the line to add a test for.
+
+By default the diff's author is **untrusted**, so a would-be-`SAFE` is withheld and returns `UNPROVEN`: coverage is measured by running the diff's own suite in-process, which an untrusted diff can forge. Pass `--trusted` (CLI) or `trusted: true` (MCP) only for a change whose author you already trust, never for an external or agent-authored diff.
 
 Coverage is **Python-only** (via `coverage.py`), so a TypeScript or mixed-language diff can never earn `SAFE` today; it returns `UNPROVEN` ("coverage of the changed code could not be determined"). The gates still run; only the coverage half is Python-only.
 

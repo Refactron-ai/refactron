@@ -23,7 +23,7 @@ Prefer to do it by hand? Pick your client below, or follow the [MCP quickstart](
 
 A coding agent has no independent way to tell a change that works from a change that only looks right. `verify_change` gives it one: run the project's own tests against the proposal, in a copy, and report what that run actually proved.
 
-- **`SAFE`**: every gate passed and your tests exercised the changed code. Suite-approved, not proven correct: the verdict inherits exactly what your tests check.
+- **`SAFE`**: every gate passed, your tests exercised the changed code, and the diff's author is trusted. Suite-approved, not proven correct: the verdict inherits exactly what your tests check. An untrusted diff (the default) cannot be `SAFE` — coverage is measured by running the diff's own suite in-process, which is forgeable — so it caps at `UNPROVEN`.
 - **`UNSAFE`**: a gate failed. The change broke something.
 - **`UNPROVEN`**: the gates passed, but the evidence for `SAFE` is missing. A warning, not a rejection.
 
@@ -153,6 +153,14 @@ The loop:
 
             "no test runner detected" or "baseline tests already fail" means
             nothing could be proven either way. Stop and tell me.
+
+            "SAFE is withheld" means the change WOULD be SAFE but the diff is
+            untrusted: coverage is measured by running the diff's own suite in the
+            same process, which a diff can forge, so a would-be-SAFE is not
+            trusted. This is EXPECTED for a change you authored. Do NOT set
+            `trusted: true` to make your own change SAFE — trust is the operator's
+            assertion about the author, never yours to self-grant. Report the
+            UNPROVEN plainly and let me decide.
 
 4. Never describe a SAFE verdict as "verified correct", "proven correct", or
    "guaranteed safe". It means the project's own tests ran the changed code and

@@ -14,6 +14,7 @@ The Refactron MCP server exposes exactly one tool. Every example below was captu
 | `edits`       | `[{ path, newContent }]` | see note | Proposed full-file contents. `path` is repo-relative.                                                                                                               |
 | `unifiedDiff` | string                   | see note | A unified (git) diff to apply and verify.                                                                                                                           |
 | `testCmd`     | string                   | no       | Override the test command. Drives both the tests gate and the coverage run. A command that names a subset of the suite floors the verdict at `UNPROVEN`; see below. |
+| `trusted`     | boolean                  | no       | Trust the change's **author**. Default `false`. When false, a would-be-`SAFE` is withheld and returns `UNPROVEN`, because coverage is measured by running the diff's own suite in-process, which a hostile diff can forge. Set `true` only if you trust the author; never for an external or untrusted diff.        |
 
 `repoRoot` is the only argument the schema marks required, but the handler needs a change to verify: supply **either** `edits` **or** `unifiedDiff`. Supplying neither returns an error result, not a verdict.
 
@@ -81,6 +82,7 @@ The tool returns the same report `verify-diff --json` prints, serialized as text
   "verdict": "UNPROVEN",
   "reportVersion": 1,
   "engineVersion": "0.4.0",
+  "trustMode": "untrusted",
   "gates": {
     "syntax": { "passed": true, "durationMs": 108 },
     "imports": { "passed": true, "durationMs": 45 },
@@ -108,6 +110,7 @@ The tool returns the same report `verify-diff --json` prints, serialized as text
 | `verdict`                      | `SAFE`, `UNSAFE`, or `UNPROVEN`. See [Verdicts](/verification/verdicts).                                                              |
 | `reportVersion`                | Schema version, currently `1`. Which **shape** you are holding: read it before relying on any field below.                            |
 | `engineVersion`                | Version of the engine that produced this report. Which **rules** produced the verdict. Absent on reports written before 0.4.1.        |
+| `trustMode`                    | `"trusted"` or `"untrusted"` (ADR-19). Which regime produced the verdict. A withheld `SAFE` (untrusted, forgeable in-process measurement) is returned as `UNPROVEN` with a reason containing "SAFE is withheld"; `trustMode` distinguishes that from a real coverage gap.        |
 | `gates`                        | `syntax`, `imports`, `tests`, each with `passed` and `durationMs`. A failed gate also carries `blockingReason`.                       |
 | `changedFiles`                 | Repo-relative paths the change touches.                                                                                               |
 | `testFilesChanged`             | Subset of `changedFiles` matching test conventions. A note, never a verdict input.                                                    |
@@ -132,6 +135,8 @@ The tool returns the same report `verify-diff --json` prints, serialized as text
 `"Tests pass, but coverage of the changed code could not be determined."` means no measurement happened. The diff was not all Python, `coverage.py` was unavailable, or the tests never loaded the copy under verification. No test you write moves this one.
 
 Treating those as the same sentence is how a reader talks themselves into trusting a verdict that proved nothing. They are reported separately on purpose.
+
+A third `UNPROVEN` shape is a **trust withhold**. The gates passed and the changed code is covered, but the author is untrusted (the default), so `SAFE` is withheld because the in-process measurement is forgeable. Its `reason` contains "SAFE is withheld" and `trustMode` is `"untrusted"`. This is not a coverage gap, and no test moves it. Set the `trusted` argument to `true` only if you actually trust the author; never for an external or agent-authored change.
 
 ## Errors
 

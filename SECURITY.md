@@ -61,9 +61,13 @@ belongs to the repository being verified. Both are treated as untrusted.
 - **Diff intake.** A path taken from a diff's `---`/`+++` headers is refused
   before it is read if it resolves outside the repository.
 - **Your credentials.** The test suite Refactron runs does not inherit them.
-  `REFACTRON_TOKEN`, CI tokens, cloud keys, and any variable whose name ends in
-  `_TOKEN`, `_SECRET`, `_API_KEY`, `_PASSWORD` or `_CREDENTIALS` are removed from
-  the environment handed to every spawn that executes the suite.
+  Every variable handed to a spawn that executes the suite is stripped if its name
+  carries a credential word (`TOKEN`, `SECRET`, `KEY`, `PASSWORD`, `COOKIE`,
+  `SESSION`, `AUTH`, `CERT`, …, matched per underscore-segment so `MY_TOKENIZER_PATH`
+  survives) OR its value looks like a credential — a known token prefix (`sk_`,
+  `ghp_`, `AKIA…`), a `user:pass@` connection string, a `-----BEGIN` block, or a
+  high-entropy blob. Value shape is the axis an attacker cannot rename around
+  (ADR-20). `REFACTRON_FORWARD_ENV` re-admits a var an operator knows is a non-secret.
 - **Verdict integrity.** A false `SAFE` is the only unforgivable defect in this
   product. Every degradation path — a missing sidecar, an unmeasurable coverage
   run, a test command we cannot parse, a flaky heal — resolves to `UNPROVEN`,
@@ -79,6 +83,13 @@ guarantee.
   `pytest` on the same repository yourself. A test that writes to an absolute
   path, opens a socket, or spawns a process will do so. Isolation means the
   shadow tree is a genuine copy, not that the suite is confined to it.
+
+- **Credential redaction is best-effort, not a sandbox.** We strip variables whose
+  name or value looks like a credential (above), which closes the common shapes and
+  every vector in GHSA-7gr9-rqqx-xg6m — but a secret that is BOTH benignly named and
+  benign-valued (say `DEPLOY_PIN=8675`) is undetectable. Do not run untrusted
+  verification in an environment scoped to hold production secrets it does not need;
+  the durable control is not putting them there, not the redaction.
 - **We do not sandbox the Python sidecars.** They parse source with the standard
   library and LibCST; they do not execute it.
 - **The MCP server applies no authentication.** For a stdio transport the trust

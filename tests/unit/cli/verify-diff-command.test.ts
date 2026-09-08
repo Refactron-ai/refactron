@@ -112,6 +112,7 @@ describe('parseVerifyDiffFlags', () => {
       testCmd: null,
       mutate: false,
       flakyCheck: false,
+      trusted: false,
     });
   });
   it('parses repoRoot + --diff + --json + --test-cmd', () => {
@@ -124,6 +125,7 @@ describe('parseVerifyDiffFlags', () => {
       testCmd: 'pytest -q',
       mutate: false,
       flakyCheck: false,
+      trusted: false,
     });
   });
   it('parses --diff= and --test-cmd= equals form', () => {
@@ -134,6 +136,7 @@ describe('parseVerifyDiffFlags', () => {
       testCmd: 'pytest -q',
       mutate: false,
       flakyCheck: false,
+      trusted: false,
     });
   });
   it('parses --mutate', () => {
@@ -141,6 +144,10 @@ describe('parseVerifyDiffFlags', () => {
   });
   it('parses --flaky-check', () => {
     expect(parseVerifyDiffFlags(['--flaky-check']).flakyCheck).toBe(true);
+  });
+  it('parses --trusted, and defaults it to false', () => {
+    expect(parseVerifyDiffFlags(['--trusted']).trusted).toBe(true);
+    expect(parseVerifyDiffFlags([]).trusted).toBe(false);
   });
   it('throws on unknown flag', () => {
     expect(() => parseVerifyDiffFlags(['--nope'])).toThrow(VerifyDiffFlagError);

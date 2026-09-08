@@ -40,6 +40,11 @@ const unknown: CoverageAssessment = { tool: 'none', changedLinesCovered: 'unknow
 // the pre-existing cases below read as before, and passing it explicitly is
 // itself the AC-7 evidence that a `full` scope changes nothing.
 const FULL_SCOPE: TestScopeAssessment = { scope: 'full', source: 'detected', signals: [] };
+// `trusted` defaults to true here so the pre-existing fusion-logic cases below —
+// which test the coverage/scope/mutation/stability rules, not the trust gate —
+// keep their SAFE semantics. The trust gate (ADR-19) has its own describe block,
+// which passes `trusted: false` explicitly. It is the LAST param so the existing
+// positional mutation/stability calls are undisturbed.
 function fuse(
   result: VerificationResult,
   changedFiles: string[],
@@ -47,8 +52,9 @@ function fuse(
   scope: TestScopeAssessment = FULL_SCOPE,
   mutation?: MutationResult,
   stability?: StabilityResult,
+  trusted: boolean = true,
 ) {
-  return fuseVerdict(result, changedFiles, cov, scope, mutation, stability);
+  return fuseVerdict(result, changedFiles, cov, scope, trusted, mutation, stability);
 }
 
 describe('fuseVerdict', () => {
@@ -59,6 +65,57 @@ describe('fuseVerdict', () => {
   });
   it('tests pass + changed lines covered → SAFE', () => {
     expect(fuse(result(true), ['a.py'], covered).verdict).toBe('SAFE');
+  });
+
+  // The trust gate (ADR-19, GHSA Finding 1). In-process coverage/pass-fail is
+  // forgeable by the diff's own suite, so a would-be-SAFE is withheld unless the
+  // author is trusted.
+  describe('trust gate', () => {
+    const untrusted = false;
+    it('untrusted would-be-SAFE floors to UNPROVEN, not SAFE', () => {
+      const r = fuse(result(true), ['a.py'], covered, FULL_SCOPE, undefined, undefined, untrusted);
+      expect(r.verdict).toBe('UNPROVEN');
+      expect(r.reason).toContain('SAFE is withheld');
+    });
+    it('the same evidence with a trusted author is SAFE', () => {
+      const r = fuse(result(true), ['a.py'], covered, FULL_SCOPE, undefined, undefined, true);
+      expect(r.verdict).toBe('SAFE');
+    });
+    it('trustMode is stamped on every verdict', () => {
+      expect(fuse(result(true), ['a.py'], covered).trustMode).toBe('trusted');
+      expect(
+        fuse(result(true), ['a.py'], covered, FULL_SCOPE, undefined, undefined, untrusted)
+          .trustMode,
+      ).toBe('untrusted');
+      // A failing gate is UNSAFE regardless of trust: a real problem the attacker
+      // would not forge against themselves. The gate only withholds SAFE.
+      const unsafe = fuse(
+        result(false, 'x'),
+        ['a.py'],
+        covered,
+        FULL_SCOPE,
+        undefined,
+        undefined,
+        untrusted,
+      );
+      expect(unsafe.verdict).toBe('UNSAFE');
+      expect(unsafe.trustMode).toBe('untrusted');
+    });
+    it('does not disturb a non-SAFE verdict: uncovered stays UNPROVEN with its real reason', () => {
+      const r = fuse(
+        result(true),
+        ['a.py'],
+        uncovered,
+        FULL_SCOPE,
+        undefined,
+        undefined,
+        untrusted,
+      );
+      expect(r.verdict).toBe('UNPROVEN');
+      // The real coverage-gap reason, NOT the trust-withheld reason.
+      expect(r.reason).not.toContain('SAFE is withheld');
+      expect(r.missingTests?.[0]?.file).toBe('a.py');
+    });
   });
   it('tests pass + changed lines uncovered → UNPROVEN with missingTests', () => {
     const r = fuse(result(true), ['a.py'], uncovered);

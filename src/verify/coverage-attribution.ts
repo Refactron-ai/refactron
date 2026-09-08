@@ -110,6 +110,12 @@ export interface CoverageAttribution {
    *  boolean cannot express ("12 of 40 changed statements exercised"). It does
    *  NOT feed the verdict rule. */
   changedStatements: { total: number; covered: number };
+  /** Distinct CHANGED statements coverage.py excluded (`# pragma: no cover`,
+   *  config `exclude_lines`, `if TYPE_CHECKING:`). Since ADR-18 these do NOT count
+   *  toward SAFE: in the verify-untrusted-PR model the exclusion is
+   *  attacker-controlled, so an excluded changed statement is unproven and floors
+   *  the verdict. Surfaced so a consumer can see the floor's cause. */
+  excludedChangedStatements: number;
   /** Files whose changed lines are ALL inert. Nothing to attest, so they get
    *  their own bucket and reason rather than a free pass: added lines are all a
    *  diff exposes, so a DELETED statement beside a moved blank line is invisible
@@ -148,10 +154,12 @@ interface FileAccumulator {
   statements: number;
   /** How many of them coverage.py saw execute. */
   covered: number;
-  /** How many coverage.py EXCLUDED (`# pragma: no cover`, `if TYPE_CHECKING:`).
-   *  Subtracted from this file's denominator: no test can execute them, so
-   *  counting them would make SAFE unreachable for any diff adding a
-   *  typing-only import block. */
+  /** How many changed statements coverage.py EXCLUDED (`# pragma: no cover`,
+   *  config `exclude_lines`, `if TYPE_CHECKING:`). Counted for DISCLOSURE only,
+   *  NOT subtracted from the requirement: an exclusion is attacker-controllable in
+   *  the diff under verification, so an excluded changed statement floors the file
+   *  to UNPROVEN rather than clearing it (ADR-18, superseding ADR-11's
+   *  subtraction). */
   excluded: number;
   /** Changed lines that are partially-taken branches (ADR-14); disqualify SAFE. */
   branchGaps: number[];
@@ -242,20 +250,21 @@ export function attributeChangedLines(input: CoverageAttributionInput): Coverage
     // bucket so the verdict reason can say what actually happened.
     if (acc.hadChangedLines && !acc.attributable) inertOnlyFiles.push(acc.displayPath);
 
-    // ADR-11. A file is proven when it has at least one COVERABLE changed
-    // statement and every one of them executed.
+    // ADR-11 as amended by ADR-18. A file is proven when it has at least one
+    // changed statement and EVERY changed statement executed. Excluded changed
+    // statements are NOT subtracted from the requirement: coverage.py never lists
+    // an excluded line in executed_lines, so `covered < statements` whenever any
+    // changed statement is excluded, and the file floors to UNPROVEN.
     //
-    // The `coverable === 0` arm is what keeps this a strict tightening. Under
-    // the old per-file rule a file with no exercised statement always blocked,
-    // which is how removal-only files (no changed lines at all) and inert-only
-    // files (blank/comment lines only) stayed conservative. A statement-ratio
-    // rule alone would let both slip through as vacuously satisfied, turning
-    // today's UNPROVEN into SAFE — a LOOSENING, and the one direction this
-    // change must never move. It also covers a file whose changed statements
-    // are ALL excluded: nothing was proven about it, and `0 === 0` must not
-    // read as proof.
-    const coverable = acc.statements - acc.excluded;
-    if (coverable === 0 || acc.covered < coverable) allFilesProven = false;
+    // The old rule subtracted exclusions (`coverable = statements - excluded`),
+    // which let a hostile diff annotate a changed backdoor with `# pragma: no
+    // cover` (or a coveragerc/pyproject regex) and still earn SAFE
+    // (GHSA-9xch-4mch-222g). In the verify-untrusted-PR model every exclusion
+    // source is attacker-controlled, so an excluded changed statement is not
+    // proof. The `statements === 0` arm keeps removal-only and inert-only files
+    // UNPROVEN (they produced no changed statement): `0 === 0` must not read as
+    // proof.
+    if (acc.statements === 0 || acc.covered < acc.statements) allFilesProven = false;
 
     // ADR-14: an untaken arc disqualifies the file even when its statements ran.
     if (acc.branchGaps.length > 0) {
@@ -265,15 +274,17 @@ export function attributeChangedLines(input: CoverageAttributionInput): Coverage
   }
 
   return {
-    // ADR-11: the change is covered iff EVERY changed file has at least one
-    // coverable changed statement and ALL of its coverable statements executed.
-    // The v1 rule cleared a whole file on ONE exercised statement, so a diff
-    // changing 40 statements with 1 executed read SAFE while the reason string
-    // claimed "the changed code is covered".
+    // ADR-11 as amended by ADR-18: the change is covered iff EVERY changed file
+    // has at least one changed statement and ALL of its changed statements
+    // executed. Excluded changed statements do not count as proof (they floor to
+    // UNPROVEN). The v1 rule cleared a whole file on ONE exercised statement, so a
+    // diff changing 40 statements with 1 executed read SAFE while the reason
+    // string claimed "the changed code is covered".
     // ADR-14 adds a second conjunct: no changed line may be a partial branch.
     changedLinesCovered: allFilesProven,
     ...selectUncovered([...files.values()], cap, perFileCap),
     changedStatements,
+    excludedChangedStatements: [...files.values()].reduce((n, a) => n + a.excluded, 0),
     inertOnlyFiles,
     ...(partialBranches.length > 0 ? { partialBranches } : {}),
   };

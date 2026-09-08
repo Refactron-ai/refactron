@@ -85,6 +85,7 @@ describe('a changed conditional with an untaken branch cannot earn SAFE (#117)',
       const root = await fixture('true-only');
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         unifiedDiff: DIFF,
         testCmd: 'python3 -m pytest -q',
       });
@@ -106,6 +107,7 @@ describe('a changed conditional with an untaken branch cannot earn SAFE (#117)',
       const root = await fixture('both');
       const report = await verifyDiff({
         repoRoot: root,
+        trusted: true,
         unifiedDiff: DIFF,
         testCmd: 'python3 -m pytest -q',
       });

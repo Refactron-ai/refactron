@@ -7,6 +7,28 @@ description: Release history for Refactron, newest first.
 Refactron follows [Semantic Versioning](https://semver.org/). The full,
 unabridged log lives in [`CHANGELOG.md`](https://github.com/Refactron-ai/refactron/blob/main/CHANGELOG.md).
 
+<Update label="0.4.6" description="September 7, 2026">
+  **Security: a coverage-based `SAFE` on an untrusted diff was forgeable, and the
+  default changed.** Coverage and the gates are measured by running the diff's own
+  suite in-process, so a ~6-line `conftest.py` could mark a never-run changed line
+  covered and earn a false `SAFE`. Present in 0.3.1-0.4.5.
+
+  A would-be-`SAFE` is now **withheld to `UNPROVEN` for an untrusted diff, which is
+  the default.** Trust is the operator's to assert, never the diff's: pass
+  `--trusted` (CLI) or `trusted: true` (MCP/library) for a diff whose author you
+  trust. `UNSAFE` is unchanged; every report now carries `trustMode`, and a
+  withheld reason begins "SAFE is withheld".
+
+  If you verify your own changes, add `--trusted` to keep `SAFE`. If you verify
+  untrusted PRs, the default is now correct: a forgeable `SAFE` becomes
+  `UNPROVEN`. Also hardened: coverage-driver isolation (ADR-17), an
+  excluded-statement floor (ADR-18), and stronger credential redaction to the
+  verified suite (value-shape matching; closes GHSA-7gr9-rqqx-xg6m, ADR-20).
+
+  **Also in this release:** `--flaky-check`, an opt-in stability rerun, and
+  `--mutate` now perturbs constants, not only operators.
+</Update>
+
 <Update label="0.4.5" description="September 1, 2026">
   **A changed conditional with an untested branch could earn `SAFE`.**
 
