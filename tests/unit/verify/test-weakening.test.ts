@@ -34,6 +34,32 @@ describe('detectTestWeakening', () => {
     expect(r[0]!.reasons.join(' ')).toContain('test_login_denies_bad_pw');
   });
 
+  // Async tests (pytest-asyncio/anyio) are `async def`. Rename keeps the assert
+  // count identical, so only test-identity tracking can catch it — this is red on
+  // a regex that matches `def` but not `async def`.
+  it('flags a renamed async test function (assert count unchanged)', () => {
+    const r = one(
+      'test_a.py',
+      'async def test_login_denies_bad_pw():\n    assert await login("x") is False\n',
+      'async def test_login():\n    assert await login("x") is False\n',
+    );
+    expect(r).toHaveLength(1);
+    expect(r[0]!.reasons.join(' ')).toContain('test_login_denies_bad_pw');
+  });
+
+  // A compound `setup(); assert ...` line: removing the inline assert nets zero on
+  // a line-anchored `^assert` regex, so the removal must be counted at the `;`
+  // boundary too.
+  it('counts an inline `; assert` so removing it is caught', () => {
+    const r = one(
+      'test_a.py',
+      'def test_x():\n    setup(); assert f() == 1\n',
+      'def test_x():\n    setup()\n',
+    );
+    expect(r).toHaveLength(1);
+    expect(r[0]!.reasons.join(' ')).toContain('assertion');
+  });
+
   it('flags an added skip/xfail marker', () => {
     const r = one(
       'test_a.py',
