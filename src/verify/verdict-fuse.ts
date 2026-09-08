@@ -264,6 +264,14 @@ export function fuseVerdict(
   // changedLinesCovered, so a future producer that sets one without flooring
   // cannot leak SAFE. A surviving mutant is the ADR-15 conjunct; a varied test
   // is the #146 conjunct.
+  //
+  // INVARIANT (#163, ADR-21): `testWeakening` is deliberately NOT a conjunct here
+  // — it is checked in the trusted-SAFE branch below, because folding it into the
+  // fall-through reason ladder is the region that spawned two prior false SAFEs.
+  // The cost of keeping it out: ANY new SAFE-returning path (e.g. a future
+  // verified-hermetic trust source, ADR-19) MUST re-check `testWeakening.length
+  // === 0` before returning SAFE. Today there is exactly one SAFE return, and it
+  // is guarded.
   const wouldBeSafe =
     cov.changedLinesCovered === true &&
     (cov.partialBranches?.length ?? 0) === 0 &&
