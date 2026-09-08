@@ -10,7 +10,13 @@ import { createShadowTree } from './shadow-tree.js';
 import { reportCoverage, normalizePath } from '../analyze/coverage/index.js';
 import { attributeChangedLines } from './coverage-attribution.js';
 import { buildStatementMap } from './statement-map.js';
-import { fuseVerdict, type CoverageAssessment, type VerdictReport } from './verdict-fuse.js';
+import {
+  fuseVerdict,
+  isTestFile,
+  type CoverageAssessment,
+  type VerdictReport,
+} from './verdict-fuse.js';
+import { detectTestWeakening } from './test-weakening.js';
 import {
   assessTestScope,
   configsDeclareTestpaths,
@@ -81,6 +87,25 @@ export async function verifyDiff(input: VerifyDiffInput): Promise<VerdictReport>
   }
   const changedFiles = edits.map((e) => e.path);
 
+  // #163: which changed test files did the diff WEAKEN (assertions removed, tests
+  // deleted, skips added)? Read the pre-diff content from the base tree and compare
+  // to the edit. A would-be-SAFE resting on tests the same diff relaxed is withheld
+  // in fuseVerdict. A missing base file (a newly-added test) reads as empty → never
+  // weakening.
+  const testWeakening = detectTestWeakening(
+    await Promise.all(
+      edits
+        .filter((e) => isTestFile(e.path))
+        .map(async (e) => ({
+          file: e.path,
+          oldContent: await fs
+            .readFile(path.resolve(input.repoRoot, e.path), 'utf8')
+            .catch(() => ''),
+          newContent: e.newContent,
+        })),
+    ),
+  );
+
   // 1. Gates (pass/fail) — the existing verifier manages its own shadow tree.
   const verifier = new RefactronVerifier({
     projectRoot: input.repoRoot,
@@ -129,6 +154,7 @@ export async function verifyDiff(input: VerifyDiffInput): Promise<VerdictReport>
       cov,
       testScope,
       input.trusted === true,
+      testWeakening,
       mutation,
       stability,
     ),
