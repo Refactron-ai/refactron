@@ -169,6 +169,7 @@ and is not currently published; pin `refactron@0.3.1` if you depend on it.
 
 **Roadmap:** fleet verification across many repos and audit history are the paid tier; v1.0 lands once external usage has characterized the real bug surface.
 
+This project is tested with BrowserStack
 ---
 
 ## Docs
