@@ -46,6 +46,10 @@ refactron-py/*.tar.gz
 *.tgz
 
 # Internal planning material, not published docs
+# dev-docs/ holds internal roadmap, execution/migration/monetization strategy,
+# research, and ADRs. It is confidential and must never be pushed to the public
+# repo. Keep it local only.
+dev-docs/
 docs/plans/
 docs/superpowers/
 refactron-monetization-strategy.md
