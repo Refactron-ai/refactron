@@ -5,6 +5,7 @@ import type { VerificationResult, GateResult } from '../contracts.js';
 import type { TestScopeAssessment } from './test-scope.js';
 import type { MutationResult } from './mutation.js';
 import type { StabilityResult } from './stability.js';
+import type { WeakenedTest } from './test-weakening.js';
 
 export type Verdict = 'SAFE' | 'UNSAFE' | 'UNPROVEN';
 
@@ -107,6 +108,11 @@ export interface VerdictReport {
   // ids OR synthetic `run N (seed S)` markers when the output did not parse, so
   // it is not a deduped test-id list (see StabilityResult).
   stability?: StabilityResult;
+  // Changed test files the diff WEAKENED (assertions removed, tests deleted, skips
+  // added) — issue #163. A would-be-SAFE with any entry here is withheld to
+  // UNPROVEN (the covering evidence was relaxed by the same diff). Present only
+  // when non-empty; a verdict input, not a footnote (unlike testFilesChanged).
+  testWeakening?: WeakenedTest[];
 }
 
 // The tests gate carries flakySuspects on the SAME object it returns as the
@@ -120,7 +126,7 @@ function flakySuspectsOf(tests: GateResult): string[] | undefined {
 
 // Changed-file paths (repo-relative, posix) that look like tests: a `tests/` or
 // `test/` path segment, or a filename matching Python/TS test conventions.
-function isTestFile(p: string): boolean {
+export function isTestFile(p: string): boolean {
   const parts = p.replace(/\\/g, '/').split('/');
   if (parts.includes('tests') || parts.includes('test')) return true;
   const base = parts[parts.length - 1] ?? '';
@@ -153,12 +159,17 @@ const BASELINE_RED_SUBSTRING = 'baseline tests already fail';
 // flag would make "a new call site forgot to pass it" default to the permissive
 // regime and leak a false SAFE. Required makes the omission a compile error. The
 // safe default (untrusted) lives at the I/O boundary (VerifyDiffInput), not here.
+// `testWeakening` is REQUIRED for the same reason `trusted`/`testScope` are: it is
+// a false-SAFE-relevant input (a forgotten one silently skips a downgrade and
+// leaks the exact self-weakening SAFE #163 exists to catch), so omission is a
+// compile error. An empty array means "no weakening", the common case.
 export function fuseVerdict(
   result: VerificationResult,
   changedFiles: string[],
   cov: CoverageAssessment,
   testScope: TestScopeAssessment,
   trusted: boolean,
+  testWeakening: WeakenedTest[],
   mutation?: MutationResult,
   stability?: StabilityResult,
 ): VerdictReport {
@@ -172,6 +183,7 @@ export function fuseVerdict(
     coverage: cov,
     ...(flakyTests ? { flakyTests } : {}),
     testScope,
+    ...(testWeakening.length > 0 ? { testWeakening } : {}),
     ...(mutation ? { mutation } : {}),
     ...(stability ? { stability } : {}),
   };
@@ -252,6 +264,14 @@ export function fuseVerdict(
   // changedLinesCovered, so a future producer that sets one without flooring
   // cannot leak SAFE. A surviving mutant is the ADR-15 conjunct; a varied test
   // is the #146 conjunct.
+  //
+  // INVARIANT (#163, ADR-21): `testWeakening` is deliberately NOT a conjunct here
+  // — it is checked in the trusted-SAFE branch below, because folding it into the
+  // fall-through reason ladder is the region that spawned two prior false SAFEs.
+  // The cost of keeping it out: ANY new SAFE-returning path (e.g. a future
+  // verified-hermetic trust source, ADR-19) MUST re-check `testWeakening.length
+  // === 0` before returning SAFE. Today there is exactly one SAFE return, and it
+  // is guarded.
   const wouldBeSafe =
     cov.changedLinesCovered === true &&
     (cov.partialBranches?.length ?? 0) === 0 &&
@@ -260,6 +280,27 @@ export function fuseVerdict(
     !flakyReason &&
     !narrowedReason;
   if (wouldBeSafe && trusted) {
+    if (testWeakening.length > 0) {
+      // #163: the diff RELAXED the tests that would judge it, so "tests pass +
+      // covered" rests on evidence the same changeset weakened. Even for a trusted
+      // author this cannot be SAFE — an agent gutting its own test to make its
+      // change pass is a documented failure mode. Degrade, name the weakened test,
+      // point at the pre-diff intent. NOT UNSAFE: we cannot distinguish a
+      // self-weakening from a legitimate behavior change, only that SAFE is no
+      // longer earned. Distinct substring ("weakened the tests") for consumers.
+      const w = testWeakening[0]!;
+      const more =
+        testWeakening.length > 1 ? ` (and ${testWeakening.length - 1} more test file(s))` : '';
+      return {
+        verdict: 'UNPROVEN',
+        ...base,
+        reason:
+          `Tests pass and the changed code is covered, but the diff weakened the tests ` +
+          `that would judge it — ${w.file}: ${w.reasons.join('; ')}${more}. A change that ` +
+          `relaxes its own covering tests cannot earn SAFE; restore the assertions, or ` +
+          `verify against the pre-diff tests.`,
+      };
+    }
     return {
       verdict: 'SAFE',
       ...base,
