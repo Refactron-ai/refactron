@@ -436,16 +436,45 @@ its value is scanned with the same rules as the command line, and it is checked
 against the runner that variable actually feeds, so a `PYTEST_ADDOPTS` left in
 your shell will not floor a vitest project.
 
-Narrowing configured in your **pytest** configuration is also seen. `addopts`
-and `testpaths` are read from `pytest.ini`, `tox.ini`, `setup.cfg` and
-`pyproject.toml`, and `addopts` is scanned with the same rules as the command
-line — so `addopts = -q --strict-markers` stays `full`, while `addopts = -k foo`
-does not. `testpaths` always counts as narrowing: it restricts collection, and
-whether the restriction excludes anything cannot be known without collecting.
+Narrowing configured in your **pytest** configuration is also seen, and it is
+read by pytest itself. A small helper runs under the same Python as your tests
+(the interpreter your command names, such as `python3.12 -m pytest` or
+`.venv/bin/python -m pytest`, or the one a `pytest` script's shebang names;
+otherwise `python3`) and uses pytest's own code to choose the configuration file
+and parse it. Every file pytest accepts is therefore read the way pytest reads
+it, in pytest's order of precedence: `pytest.toml`, `.pytest.toml` and a native
+`[tool.pytest]` table (pytest 9), `pytest.ini`, `.pytest.ini`, `pyproject.toml`,
+`tox.ini` and `setup.cfg`, including a file named by `-c` / `--config-file` and
+values set by `-o` / `--override-ini`, whether they appear in your command or in
+`PYTEST_ADDOPTS`. The helper never imports your `conftest.py`, a plugin, or any
+module from your repository.
 
-Only the repository root is read. pytest walks up to find its rootdir, but your
-suite runs inside an isolated copy whose parent is a temporary directory, so a
-config file above your repository does not reach the run being judged.
+`addopts` is scanned with the same rules as the command line, so
+`addopts = -q --strict-markers` stays `full` while `addopts = -k foo` does not.
+`testpaths` counts as narrowing only when it leaves a test out: Refactron lists
+the files pytest would discover with its default patterns (`test_*.py`,
+`*_test.py`) and checks each against `testpaths`, so `testpaths = ["tests"]` in a
+project whose tests all live under `tests/` stays `full`. When that list cannot
+be trusted, `testpaths` counts as narrowing: the scan was capped, no test files
+were found, or `python_files` is customised so the default patterns do not
+apply.
+
+**A configuration that cannot be read counts as narrowing.** If the helper cannot
+give an answer (no Python interpreter, pytest not importable from it, a syntax
+error in the file, a timeout), the scope is `narrowed` and the signal says the
+pytest configuration "could not be read", naming the file when it is known.
+Reporting `unknown` instead would not cap the verdict, and the configuration
+nobody read could be the one that deselects the failing test. A project that uses
+pytest 9's `pytest.toml` or `[tool.pytest]` while its interpreter has an older
+pytest, which ignores those, is treated the same way. If this happens for a
+command such as `poetry run pytest` or `uv run pytest`, whose interpreter cannot
+be located from the command, name the environment's interpreter instead:
+`.venv/bin/python -m pytest -q`.
+
+Only configuration inside the repository is read. pytest walks up to find its
+rootdir, but your suite runs inside an isolated copy whose parent is a temporary
+directory, so a config file above your repository does not reach the run being
+judged.
 
 A vitest `include` or a jest `testMatch` is still **not** seen. Those are
 JavaScript and would have to be executed rather than parsed. In practice they
