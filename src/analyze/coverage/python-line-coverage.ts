@@ -302,6 +302,22 @@ export function toCoverageRunArgs(
   return null;
 }
 
+/** The interpreter the tests gate's shell runs `testCmd` under, for sidecars that
+ *  must see the same installed packages: a leading `pythonX.Y` (or a path to
+ *  one, relative to `cwd`), else the resolved console script's shebang, else
+ *  `python3`. */
+export function testCommandInterpreter(testCmd: string, cwd: string): string {
+  const tokens = tokenizeCommand(testCmd);
+  let i = 0;
+  while (i < tokens.length && ASSIGNMENT_RE.test(tokens[i] ?? '')) i++;
+  const head = tokens[i] ?? '';
+  if (/^python[0-9.]*$/.test(path.basename(head))) {
+    return head.includes('/') ? path.resolve(cwd, head) : head;
+  }
+  if (SHELL_COMPOSITE_RE.test(testCmd)) return 'python3';
+  return toCoverageRunArgs(testCmd, resolveConsoleScript)?.interpreter ?? 'python3';
+}
+
 /** Find the file a shell would execute for a console entry point, and accept it
  *  only if it is a Python script we can hand to `coverage run` positionally.
  *

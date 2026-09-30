@@ -130,3 +130,155 @@ describe('a pytest config that narrows the suite cannot earn SAFE (#137)', () =>
     240_000,
   );
 });
+
+// Issue #174. Valid pytest config that the old line reader misread as "no
+// narrowing". pytest itself reads each of these as `-k test_a`, so test_b, the
+// only test that catches the change, never runs. Each row was SAFE on main.
+describe('config pytest reads as narrowing cannot earn SAFE, whatever its shape (#174)', () => {
+  const MISREAD: ReadonlyArray<readonly [string, string, string]> = [
+    [
+      'a multi-line TOML addopts string',
+      'pyproject.toml',
+      '[tool.pytest.ini_options]\naddopts = """\n-k test_a\n"""\n',
+    ],
+    [
+      'a comment after the TOML section header',
+      'pyproject.toml',
+      '[tool.pytest.ini_options]  # cfg\naddopts = "-k test_a"\n',
+    ],
+    ['.pytest.ini', '.pytest.ini', '[pytest]\naddopts = -k test_a\n'],
+    [
+      'an ini continuation after a --x=y line',
+      'pytest.ini',
+      '[pytest]\naddopts =\n    --tb=short\n    -k test_a\n',
+    ],
+    ['a blank line inside an ini value', 'pytest.ini', '[pytest]\naddopts = -q\n\n    -k test_a\n'],
+    [
+      'a comment line inside an ini value',
+      'pytest.ini',
+      '[pytest]\naddopts = -q\n# keep CI fast\n    -k test_a\n',
+    ],
+    [
+      'an ini continuation line starting with [',
+      'pytest.ini',
+      '[pytest]\nnorecursedirs =\n    [._]*\n    build\naddopts = -k test_a\n',
+    ],
+    ['CR-only line endings', 'tox.ini', '[tox]\renvlist = py\r[pytest]\raddopts = -k test_a\r'],
+    [
+      'a form-feed line separator',
+      'setup.cfg',
+      '[metadata]\nname = x\x0c[tool:pytest]\naddopts = -k test_a\n',
+    ],
+    [
+      'a \\x85 line separator',
+      'setup.cfg',
+      '[metadata]\nname = x\x85[tool:pytest]\naddopts = -k test_a\n',
+    ],
+    [
+      'a quoted top-level "tool" inline table',
+      'pyproject.toml',
+      '"tool" = { pytest = { ini_options = { addopts = "-k test_a" } } }\n',
+    ],
+    [
+      'a quoted "tool" key in the table header',
+      'pyproject.toml',
+      '["tool".pytest.ini_options]\naddopts = "-k test_a"\n',
+    ],
+  ];
+
+  for (const [label, file, body] of MISREAD) {
+    it.skipIf(NO_PYTHON)(
+      `refuses SAFE for ${label}`,
+      async () => {
+        const root = await fixture(file, body);
+        const report = await verifyDiff({
+          repoRoot: root,
+          trusted: true,
+          unifiedDiff: DIFF,
+          testCmd: 'python3 -m pytest -q',
+        });
+        expect(report.verdict).not.toBe('SAFE');
+        expect(report.testScope.scope).toBe('narrowed');
+        expect(report.testScope.signals.join(' ')).toContain(file);
+      },
+      240_000,
+    );
+  }
+
+  it.skipIf(NO_PYTHON)(
+    'reads the config named by -c in the command',
+    async () => {
+      const root = await fixture('ci.ini', '[pytest]\naddopts = -k test_a\n');
+      const report = await verifyDiff({
+        repoRoot: root,
+        trusted: true,
+        unifiedDiff: DIFF,
+        testCmd: 'python3 -m pytest -q -c ci.ini',
+      });
+      expect(report.verdict).not.toBe('SAFE');
+      expect(report.testScope.scope).toBe('narrowed');
+      expect(report.testScope.signals.join(' ')).toContain('ci.ini');
+    },
+    240_000,
+  );
+});
+
+// The failure mode of the fix: config that narrows nothing must not floor. The
+// change is harmless, test_b still runs and passes, so SAFE is the right answer.
+describe('config that narrows nothing keeps its SAFE (#174)', () => {
+  const HARMLESS = [
+    '--- a/calc.py',
+    '+++ b/calc.py',
+    '@@ -1,2 +1,2 @@',
+    ' def add(a, b):',
+    '-    return a + b',
+    '+    return b + a',
+    '',
+  ].join('\n');
+
+  const BENIGN: ReadonlyArray<readonly [string, string, string]> = [
+    [
+      'a Poetry dependency line naming pytest',
+      'pyproject.toml',
+      '[tool.poetry]\nname = "calc"\nversion = "0.1.0"\n\n[tool.poetry.group.dev.dependencies]\npytest = "^8.0"\n\n[tool.pytest.ini_options]\nminversion = "7.0"\n',
+    ],
+    [
+      'a ruff banned-api entry for pytest.warns',
+      'pyproject.toml',
+      '[tool.ruff.lint.flake8-tidy-imports.banned-api]\n"pytest.warns".msg = "use our helper"\n\n[tool.pytest.ini_options]\naddopts = "-ra"\n',
+    ],
+    [
+      'a [tool.pytest_env] neighbour table',
+      'pyproject.toml',
+      '[tool.pytest.ini_options]\naddopts = "-ra"\n\n[tool.pytest_env]\nFOO = "bar"\n',
+    ],
+    [
+      'a commented-out addopts',
+      'pytest.ini',
+      '[pytest]\n# addopts = -k test_a\nminversion = 7.0\n',
+    ],
+    [
+      'a black-style addopts array with --x=y items',
+      'pyproject.toml',
+      '[tool.pytest.ini_options]\naddopts = [\n    "--tb=short",\n    "--strict-markers",\n]\n',
+    ],
+  ];
+
+  for (const [label, file, body] of BENIGN) {
+    it.skipIf(NO_PYTHON)(
+      `keeps SAFE with ${label}`,
+      async () => {
+        const root = await fixture(file, body);
+        const report = await verifyDiff({
+          repoRoot: root,
+          trusted: true,
+          unifiedDiff: HARMLESS,
+          testCmd: 'python3 -m pytest -q',
+        });
+        expect(report.testScope.scope).toBe('full');
+        expect(report.verdict).toBe('SAFE');
+      },
+      240_000,
+    );
+  }
+});

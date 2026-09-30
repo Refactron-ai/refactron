@@ -11,6 +11,8 @@ import {
   classifyTestCommand,
   assessTestScope,
   configsDeclareTestpaths,
+  pytestInvocationOf,
+  type PytestConfigContext,
 } from '../../../src/verify/test-scope.js';
 
 function scopeOf(cmd: string): string {
@@ -754,16 +756,29 @@ describe('F5: the ambient runner gate must apply on the DETECTED path too', () =
 // The value is fed through the same `scanArgs` the command line uses, so this
 // reads config rather than interpreting it. `-q --strict-markers` therefore
 // stays `full` and this does not become a blanket floor on configured projects.
+//
+// Since #174 the values arrive already parsed, by pytest itself (the
+// pytest_config.py sidecar); how each file shape parses is pinned in
+// tests/unit/verify/pytest-config-sidecar.test.ts.
 describe('narrowing declared in a pytest config file (#137)', () => {
-  const cfg = (name: string, content: string, testFiles: string[] | null = null) => ({
-    configs: [{ name, content }],
+  const cfg = (
+    file: string,
+    values: { addopts?: string[]; testpaths?: string[]; pythonFiles?: string[] },
+    testFiles: string[] | null = null,
+  ): PytestConfigContext => ({
+    config: {
+      file,
+      addopts: values.addopts ?? null,
+      testpaths: values.testpaths ?? null,
+      pythonFiles: values.pythonFiles ?? null,
+    },
     testFiles,
   });
-  const scopeOf = (name: string, content: string, cmd = 'python3 -m pytest -q') =>
-    assessTestScope(cmd, {}, undefined, cfg(name, content));
+  const scopeOf = (ctx: PytestConfigContext, cmd = 'python3 -m pytest -q') =>
+    assessTestScope(cmd, {}, undefined, ctx);
 
-  it('sees addopts in pytest.ini', () => {
-    const a = scopeOf('pytest.ini', '[pytest]\naddopts = -k test_a\n');
+  it('sees addopts and names the file', () => {
+    const a = scopeOf(cfg('pytest.ini', { addopts: ['-k', 'test_a'] }));
     expect(a.scope).toBe('narrowed');
     // The signal has to name the FILE. "-k selects a subset" alone sends the
     // user hunting through a command line that does not contain -k.
@@ -771,37 +786,18 @@ describe('narrowing declared in a pytest config file (#137)', () => {
     expect(a.signals.join(' ')).toContain('-k');
   });
 
-  it('sees the [pytest] section of tox.ini', () => {
-    expect(scopeOf('tox.ini', '[pytest]\naddopts = -k test_a\n').scope).toBe('narrowed');
-  });
-
-  it('sees the [tool:pytest] section of setup.cfg', () => {
-    expect(scopeOf('setup.cfg', '[tool:pytest]\naddopts = -k test_a\n').scope).toBe('narrowed');
-  });
-
-  it('sees a quoted addopts string in pyproject.toml', () => {
-    const toml = '[tool.pytest.ini_options]\naddopts = "-k test_a"\n';
-    expect(scopeOf('pyproject.toml', toml).scope).toBe('narrowed');
-  });
-
-  it('sees the TOML array form of addopts', () => {
-    const toml = '[tool.pytest.ini_options]\naddopts = ["-k", "test_a"]\n';
-    expect(scopeOf('pyproject.toml', toml).scope).toBe('narrowed');
-  });
-
-  it('sees a multi-line ini addopts continuation', () => {
-    // The narrowing flag is on the CONTINUATION line, so reading only the first
-    // line of the value would miss it.
-    const ini = '[pytest]\naddopts =\n    --strict-markers\n    -k test_a\n';
-    expect(scopeOf('pytest.ini', ini).scope).toBe('narrowed');
-  });
+  it.each(['tox.ini', 'setup.cfg', 'pyproject.toml', '.pytest.ini', 'pytest.toml'])(
+    'names %s in the signal',
+    (file) => {
+      const a = scopeOf(cfg(file, { addopts: ['-k', 'test_a'] }));
+      expect(a.scope).toBe('narrowed');
+      expect(a.signals.join(' ')).toContain(file);
+    },
+  );
 
   it('treats testpaths as narrowing when a test file sits outside it', () => {
-    const a = assessTestScope(
-      'python3 -m pytest -q',
-      {},
-      undefined,
-      cfg('pytest.ini', '[pytest]\ntestpaths = tests/unit\n', [
+    const a = scopeOf(
+      cfg('pytest.ini', { testpaths: ['tests/unit'] }, [
         'tests/unit/test_a.py',
         'tests/integration/test_b.py', // excluded by testpaths
       ]),
@@ -818,14 +814,8 @@ describe('narrowing declared in a pytest config file (#137)', () => {
     // and it is close to the most common line in any pytest config. Flooring it
     // would make this fix worse than the defect for a large share of projects.
     // This case is why the caller walks the tree instead of guessing.
-    const a = assessTestScope(
-      'python3 -m pytest -q',
-      {},
-      undefined,
-      cfg('pyproject.toml', '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n', [
-        'tests/test_a.py',
-        'tests/sub/test_b.py',
-      ]),
+    const a = scopeOf(
+      cfg('pyproject.toml', { testpaths: ['tests'] }, ['tests/test_a.py', 'tests/sub/test_b.py']),
     );
     expect(a.scope).toBe('full');
   });
@@ -833,14 +823,8 @@ describe('narrowing declared in a pytest config file (#137)', () => {
   it('does not let a testpaths prefix swallow a sibling directory', () => {
     // `tests` must not be read as covering `tests_extra/`. Segment matching, not
     // string prefix.
-    const a = assessTestScope(
-      'python3 -m pytest -q',
-      {},
-      undefined,
-      cfg('pytest.ini', '[pytest]\ntestpaths = tests\n', [
-        'tests/test_a.py',
-        'tests_extra/test_b.py',
-      ]),
+    const a = scopeOf(
+      cfg('pytest.ini', { testpaths: ['tests'] }, ['tests/test_a.py', 'tests_extra/test_b.py']),
     );
     expect(a.scope).toBe('narrowed');
   });
@@ -851,14 +835,12 @@ describe('narrowing declared in a pytest config file (#137)', () => {
     // would clear a verdict on an answer we do not have. Truncation is the
     // dangerous one: it yields a non-empty but INCOMPLETE list, and the excluded
     // file could be the one past the cap.
-    expect(scopeOf('pytest.ini', '[pytest]\ntestpaths = tests/unit\n').scope).toBe('narrowed');
-    const empty = assessTestScope(
-      'python3 -m pytest -q',
-      {},
-      undefined,
-      cfg('pytest.ini', '[pytest]\ntestpaths = tests/unit\n', []),
-    );
-    expect(empty.scope).toBe('narrowed');
+    expect(scopeOf(cfg('pytest.ini', { testpaths: ['tests/unit'] })).scope).toBe('narrowed');
+    expect(scopeOf(cfg('pytest.ini', { testpaths: ['tests/unit'] }, [])).scope).toBe('narrowed');
+  });
+
+  it('treats a whole-tree testpaths entry as the whole suite', () => {
+    expect(scopeOf(cfg('pytest.ini', { testpaths: ['.'] })).scope).toBe('full');
   });
 
   it('knows which configs declare testpaths, so the caller can skip the walk', () => {
@@ -882,13 +864,8 @@ describe('narrowing declared in a pytest config file (#137)', () => {
   it('narrows on testpaths when python_files is customised', () => {
     // A custom discovery pattern means the caller's file list was built with the
     // wrong one, so it cannot answer the question.
-    const a = assessTestScope(
-      'python3 -m pytest -q',
-      {},
-      undefined,
-      cfg('pytest.ini', '[pytest]\ntestpaths = tests\npython_files = check_*.py\n', [
-        'tests/test_a.py',
-      ]),
+    const a = scopeOf(
+      cfg('pytest.ini', { testpaths: ['tests'], pythonFiles: ['check_*.py'] }, ['tests/test_a.py']),
     );
     expect(a.scope).toBe('narrowed');
     expect(a.signals.join(' ')).toContain('python_files');
@@ -898,55 +875,117 @@ describe('narrowing declared in a pytest config file (#137)', () => {
     // The whole point of reusing the scanner. If this floored, every project
     // with a tidy pytest.ini would become permanently UNPROVEN and the fix
     // would be worse than the bug.
-    const ini = '[pytest]\naddopts = -q --strict-markers --tb=short\n';
-    expect(scopeOf('pytest.ini', ini).scope).toBe('full');
+    const a = scopeOf(cfg('pytest.ini', { addopts: ['-q', '--strict-markers', '--tb=short'] }));
+    expect(a.scope).toBe('full');
   });
 
-  it('ignores a config with no pytest section at all', () => {
-    const toml = '[tool.black]\nline-length = 88\n';
-    expect(scopeOf('pyproject.toml', toml).scope).toBe('full');
-  });
-
-  it('ignores keys in a LATER section', () => {
-    // `addopts` under [tool.coverage.run] is not pytest configuration. Reading
-    // to the next section header is what stops a neighbouring key being read as
-    // ours.
-    const toml =
-      '[tool.pytest.ini_options]\nminversion = "6.0"\n\n[tool.other]\naddopts = "-k x"\n';
-    expect(scopeOf('pyproject.toml', toml).scope).toBe('full');
-  });
-
-  it('narrows when the value is present but unparseable', () => {
-    // Reporting "no narrowing found" for something we could not read is the
-    // same defect as a test that passes when its prerequisite is missing. An
-    // unreadable value must floor, not clear.
-    const toml = '[tool.pytest.ini_options]\naddopts = ["-k", "test_a"\n';
-    expect(scopeOf('pyproject.toml', toml).scope).toBe('narrowed');
+  it('changes nothing when no config applies', () => {
+    expect(scopeOf({ config: null, testFiles: null }).scope).toBe('full');
+    expect(scopeOf(cfg('pyproject.toml', {})).scope).toBe('full');
   });
 
   it('does not apply a pytest config to a vitest run', () => {
     // Gated on the runner, exactly as ambient PYTEST_ADDOPTS already is. A
     // stray pytest.ini in a JS project must not floor its verdict.
-    const a = assessTestScope(
-      'npx vitest run',
-      {},
-      undefined,
-      cfg('pytest.ini', '[pytest]\naddopts = -k test_a\n'),
-    );
+    const a = scopeOf(cfg('pytest.ini', { addopts: ['-k', 'test_a'] }), 'npx vitest run');
     expect(a.scope).toBe('full');
   });
 
   it('still reports narrowed for a command filter when the config is clean', () => {
-    const a = assessTestScope(
-      'pytest -k test_a',
-      {},
-      undefined,
-      cfg('pytest.ini', '[pytest]\naddopts = -q\n'),
-    );
+    const a = scopeOf(cfg('pytest.ini', { addopts: ['-q'] }), 'pytest -k test_a');
     expect(a.scope).toBe('narrowed');
   });
 
-  it('changes nothing when no config sources are supplied', () => {
+  it('changes nothing when no config context is supplied', () => {
     expect(assessTestScope('python3 -m pytest -q', {}).scope).toBe('full');
   });
+});
+
+// Issue #174. A config that could not be read must FLOOR. ADR-12 lets `unknown`
+// reach SAFE, so answering `unknown` - or `full` - would leave the false SAFE open.
+describe('an unreadable pytest config fails closed (#174)', () => {
+  const unreadable = (file: string | null, reason: string): PytestConfigContext => ({
+    config: null,
+    unreadable: { file, reason },
+    testFiles: null,
+  });
+
+  it('narrows, says it could not be read, and names the file', () => {
+    const a = assessTestScope(
+      'python3 -m pytest -q',
+      {},
+      undefined,
+      unreadable('pyproject.toml', 'Expected a value'),
+    );
+    expect(a.scope).toBe('narrowed');
+    expect(a.signals.join(' ')).toMatch(/could not be read/);
+    expect(a.signals.join(' ')).toContain('pyproject.toml');
+    expect(a.signals.join(' ')).toContain('Expected a value');
+  });
+
+  it('narrows when the file is not known either', () => {
+    const a = assessTestScope(
+      'python3 -m pytest -q',
+      {},
+      undefined,
+      unreadable(null, 'the config reader timed out'),
+    );
+    expect(a.scope).toBe('narrowed');
+    expect(a.signals.join(' ')).toMatch(/could not be read.*timed out/);
+  });
+
+  it('applies to the detected command too', () => {
+    const a = assessTestScope(undefined, {}, 'python3 -m pytest -q', unreadable(null, 'x'));
+    expect(a).toMatchObject({ scope: 'narrowed', source: 'detected' });
+  });
+
+  it('does not touch a non-pytest runner', () => {
+    expect(assessTestScope('npx vitest run', {}, undefined, unreadable(null, 'x')).scope).toBe(
+      'full',
+    );
+  });
+
+  it('an empty testpaths list narrows nothing, as in pytest', () => {
+    const a = assessTestScope('python3 -m pytest -q', {}, undefined, {
+      config: { file: 'pyproject.toml', addopts: null, testpaths: [], pythonFiles: null },
+      testFiles: null,
+    });
+    expect(a.scope).toBe('full');
+  });
+});
+
+// The argv the config sidecar receives: exactly what reaches pytest.
+describe('pytestInvocationOf (#174)', () => {
+  it.each([
+    ['python3 -m pytest -q', ['-q']],
+    ['pytest -q -c ci.ini', ['-q', '-c', 'ci.ini']],
+    [
+      'PYTHONPATH=. python3 -m pytest --rootdir=. -o testpaths=a',
+      ['--rootdir=.', '-o', 'testpaths=a'],
+    ],
+    ['poetry run pytest -q', ['-q']],
+    ['env FOO=1 py.test -q', ['-q']],
+    ['pytest -q #nightly -k x', ['-q']],
+  ])('%s', (cmd, args) => {
+    expect(pytestInvocationOf(cmd, {})).toEqual({ args, envAddopts: null });
+  });
+
+  it('carries PYTEST_ADDOPTS, the inline one over the ambient one', () => {
+    expect(pytestInvocationOf('python3 -m pytest', { PYTEST_ADDOPTS: '-c a.ini' })).toEqual({
+      args: [],
+      envAddopts: '-c a.ini',
+    });
+    expect(
+      pytestInvocationOf('PYTEST_ADDOPTS="-c b.ini" python3 -m pytest', {
+        PYTEST_ADDOPTS: '-c a.ini',
+      }),
+    ).toEqual({ args: [], envAddopts: '-c b.ini' });
+  });
+
+  it.each(['npx vitest run', 'python3 -m unittest', 'make test', 'pytest -q && lint', ''])(
+    'is null for %j, which does not (only) run pytest',
+    (cmd) => {
+      expect(pytestInvocationOf(cmd, {})).toBeNull();
+    },
+  );
 });

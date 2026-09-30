@@ -19,12 +19,12 @@ import {
 import { detectTestWeakening, type WeakenedTest } from './test-weakening.js';
 import {
   assessTestScope,
-  configsDeclareTestpaths,
-  PYTEST_CONFIG_FILES,
+  pytestInvocationOf,
   type PytestConfigContext,
-  type PytestConfigSource,
   type TestScopeAssessment,
 } from './test-scope.js';
+import { readPytestConfig, type ReadPytestConfigOptions } from './pytest-config.js';
+import { testCommandInterpreter } from '../analyze/coverage/python-line-coverage.js';
 import { detectRunner } from './runners/detect.js';
 import { ENGINE_VERSION } from '../engine-version.js';
 import {
@@ -221,38 +221,51 @@ export async function verifyDiff(input: VerifyDiffInput): Promise<VerdictReport>
  *  will not do. `detectRunner` is a few fs.access calls; the tests gate calls it
  *  again with the same inputs and gets the same answer. */
 async function resolveTestScope(input: VerifyDiffInput): Promise<TestScopeAssessment> {
-  const pytestConfig = await readPytestContext(input.repoRoot);
   if (input.testCmd !== undefined && input.testCmd.trim() !== '') {
+    const pytestConfig = await readPytestContext(input.repoRoot, input.testCmd, process.env);
     return assessTestScope(input.testCmd, process.env, undefined, pytestConfig);
   }
   const spec = await detectRunner(input.repoRoot);
   const detected = spec ? [spec.cmd, ...spec.args].join(' ') : undefined;
+  const pytestConfig = await readPytestContext(input.repoRoot, detected ?? '', process.env);
   return assessTestScope(undefined, process.env, detected, pytestConfig);
 }
 
-/** pytest configuration living at the repository root (#137).
+/** The pytest configuration `command` runs under, as pytest resolves it (#137,
+ *  #174), read by the pytest_config.py sidecar under the interpreter the tests
+ *  use. A command that does not run pytest reads nothing.
  *
- *  Root only, deliberately. pytest walks UP to find its rootdir, but the suite
- *  runs inside the shadow tree, whose parent is a temp directory: a config above
- *  the repository is not copied and therefore does not apply to the run we are
- *  judging. Reading it would report narrowing that never happened.
+ *  Configs above the repository root are ignored by the sidecar: the suite runs
+ *  inside the shadow tree, whose parent is a temp directory, so such a file does
+ *  not apply to the run we are judging.
  *
- *  A missing file is the overwhelming case and is simply skipped. */
-async function readPytestContext(repoRoot: string): Promise<PytestConfigContext> {
-  const configs: PytestConfigSource[] = [];
-  for (const name of PYTEST_CONFIG_FILES) {
-    try {
-      configs.push({ name, content: await fs.readFile(path.join(repoRoot, name), 'utf8') });
-    } catch {
-      // Absent, unreadable, or not UTF-8. pytest could not read it either.
-    }
+ *  Exported for direct testing of the fail-closed path. */
+export async function readPytestContext(
+  repoRoot: string,
+  command: string,
+  env: Readonly<Record<string, string | undefined>>,
+  opts: ReadPytestConfigOptions = {},
+): Promise<PytestConfigContext> {
+  const invocation = pytestInvocationOf(command, env);
+  if (invocation === null) return { config: null, testFiles: null };
+  const read = await readPytestConfig(repoRoot, invocation, {
+    pythonBin: opts.pythonBin ?? testCommandInterpreter(command, repoRoot),
+    ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+  });
+  if (!read.ok) {
+    return { config: null, unreadable: { file: read.file, reason: read.reason }, testFiles: null };
   }
-  // Walked ONLY when a config actually declares `testpaths`, which is the only
-  // question the list answers. The walk costs about a second on a large
-  // checkout, and most projects never set the key, so this keeps the common
-  // path free.
-  const testFiles = configsDeclareTestpaths(configs) ? await findTestFiles(repoRoot) : null;
-  return { configs, testFiles };
+  const config = {
+    file: read.file,
+    addopts: read.addopts,
+    testpaths: read.testpaths,
+    pythonFiles: read.pythonFiles,
+  };
+  // Walked ONLY when `testpaths` is set, the only question the list answers: the
+  // walk costs about a second on a large checkout.
+  const testFiles =
+    config.testpaths !== null && config.testpaths.length > 0 ? await findTestFiles(repoRoot) : null;
+  return { config, testFiles };
 }
 
 /** Directories pytest would not collect from, or that would make the walk
