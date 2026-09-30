@@ -833,67 +833,6 @@ export interface PytestConfigContext {
   testFiles: readonly string[] | null;
 }
 
-/** One pytest configuration file, read by the caller. Passed in rather than read
- *  here so `assessTestScope` stays pure and unit-testable without a filesystem. */
-export interface PytestConfigSource {
-  /** Filename as the user would recognise it. It goes into the signal. */
-  name: string;
-  content: string;
-}
-
-/** Does any config declare `testpaths`? The caller uses this to decide whether
- *  the tree needs walking at all: the walk costs about a second on a large
- *  checkout, and most projects never set the key. */
-export function configsDeclareTestpaths(configs: readonly PytestConfigSource[]): boolean {
-  return configs.some(({ name, content }) => {
-    const section = PYTEST_CONFIG_SECTIONS[name];
-    if (section === undefined) return false;
-    const body = sectionBody(content, section);
-    return body !== null && rawValue(body, 'testpaths') !== null;
-  });
-}
-
-/** Where each file keeps its pytest settings. pytest itself accepts all four. */
-const PYTEST_CONFIG_SECTIONS: Readonly<Record<string, string>> = {
-  'pytest.ini': 'pytest',
-  'tox.ini': 'pytest',
-  'setup.cfg': 'tool:pytest',
-  'pyproject.toml': 'tool.pytest.ini_options',
-};
-
-/** The filenames a caller should read and hand to `assessTestScope`. */
-export const PYTEST_CONFIG_FILES: readonly string[] = Object.keys(PYTEST_CONFIG_SECTIONS);
-
-/** The lines of one section, stopping at the next header.
- *
- *  Stopping matters: `addopts` under `[tool.coverage.run]` is not pytest
- *  configuration, and reading to end-of-file would adopt a neighbour's key. */
-function sectionBody(content: string, section: string): string[] | null {
-  const lines = content.split(/\r?\n/);
-  const start = lines.findIndex((l) => l.trim() === `[${section}]`);
-  if (start === -1) return null;
-  const rest = lines.slice(start + 1);
-  const end = rest.findIndex((l) => /^\s*\[/.test(l));
-  return end === -1 ? rest : rest.slice(0, end);
-}
-
-/** A key's raw value, including ini continuation lines and multi-line TOML
- *  arrays. The narrowing flag is often on a continuation line, so reading only
- *  the first line of the value is how this defect hides. */
-function rawValue(body: string[], key: string): string | null {
-  const head = new RegExp(`^\\s*${key}\\s*=`);
-  const idx = body.findIndex((l) => head.test(l));
-  if (idx === -1) return null;
-  let value = body[idx]!.replace(head, '');
-  for (const line of body.slice(idx + 1)) {
-    if (line.trim() === '') break;
-    if (!/^\s/.test(line)) break; // dedented: a new key in ini form
-    if (/^\s*[\w.-]+\s*=/.test(line)) break; // an indented NEXT key
-    value += ` ${line.trim()}`;
-  }
-  return value.trim();
-}
-
 /** Is a repo-relative test file inside a `testpaths` entry? Prefix matching on
  *  path SEGMENTS, so `tests` does not swallow `tests_extra/`. */
 function isUnder(file: string, dir: string): boolean {

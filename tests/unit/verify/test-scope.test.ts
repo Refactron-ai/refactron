@@ -10,7 +10,6 @@ import { describe, it, expect } from 'vitest';
 import {
   classifyTestCommand,
   assessTestScope,
-  configsDeclareTestpaths,
   pytestInvocationOf,
   type PytestConfigContext,
 } from '../../../src/verify/test-scope.js';
@@ -841,24 +840,6 @@ describe('narrowing declared in a pytest config file (#137)', () => {
 
   it('treats a whole-tree testpaths entry as the whole suite', () => {
     expect(scopeOf(cfg('pytest.ini', { testpaths: ['.'] })).scope).toBe('full');
-  });
-
-  it('knows which configs declare testpaths, so the caller can skip the walk', () => {
-    // The walk costs about a second on a large checkout. Gating it on this
-    // predicate is what keeps a project that only sets `addopts` paying nothing,
-    // and a wrong answer here silently changes the verdict for `testpaths`.
-    expect(
-      configsDeclareTestpaths([{ name: 'pytest.ini', content: '[pytest]\naddopts = -q\n' }]),
-    ).toBe(false);
-    expect(
-      configsDeclareTestpaths([{ name: 'pytest.ini', content: '[pytest]\ntestpaths = tests\n' }]),
-    ).toBe(true);
-    // Not ours: a `testpaths` under someone else's section must not trigger it.
-    expect(
-      configsDeclareTestpaths([
-        { name: 'pyproject.toml', content: '[tool.other]\ntestpaths = ["x"]\n' },
-      ]),
-    ).toBe(false);
   });
 
   it('narrows on testpaths when python_files is customised', () => {
