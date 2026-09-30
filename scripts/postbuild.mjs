@@ -24,9 +24,20 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = join(ROOT, 'src/verify/checks/_py');
 const OUT = join(ROOT, 'dist/verify/checks/_py');
 
+// Named as well as discovered: deleting a source file must fail here too, not
+// only a failed copy. A missing pytest_config.py floors every pytest verdict.
+const REQUIRED = [
+  'imports_check.py',
+  'mutate.py',
+  'pytest_config.py',
+  'statement_map.py',
+  'syntax_check.py',
+];
+
 const sidecars = readdirSync(SRC).filter((f) => f.endsWith('.py'));
-if (sidecars.length === 0) {
-  console.error(`postbuild: no .py sidecars found in ${SRC}`);
+const absent = REQUIRED.filter((name) => !sidecars.includes(name));
+if (absent.length > 0) {
+  console.error(`postbuild: required sidecars missing from ${SRC}: ${absent.join(', ')}`);
   process.exit(1);
 }
 
