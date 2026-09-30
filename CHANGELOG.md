@@ -7,6 +7,49 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased]
+
+### Fixed - pytest config is read by pytest, and an unreadable one no longer passes as `full` (#174)
+
+The narrowed-suite check (#137, ADR-12) read pytest configuration with a line
+reader that could not reproduce pytest's parsing, and when it misread a file it
+reported "no narrowing". A project whose own config deselected the one failing
+test could therefore receive a `SAFE` that claimed the whole suite ran. Each of
+these shapes returned `SAFE` for a change the full suite fails, reproduced end to
+end: a multi-line TOML `addopts` string, a comment after the
+`[tool.pytest.ini_options]` header, `.pytest.ini`, an ini continuation after a
+`--x=y` line, a blank or comment line inside an ini value, a continuation line
+starting with `[`, CR-only / form-feed / `\x85` line separators, a quoted
+`"tool"` table, and a config named by `-c` in the test command. In the other
+direction, a black-style TOML array with `]` at column 0 floored a config that
+narrowed nothing.
+
+Configuration is now resolved and parsed by pytest's own code, in a helper that
+runs under the same interpreter as your tests: pytest's precedence, `-c` /
+`--config-file`, `-o` / `--override-ini` and `PYTEST_ADDOPTS`, and pytest 9's
+`pytest.toml`, `.pytest.toml` and `[tool.pytest]`. The rules that judge the values
+are unchanged. **If the configuration cannot be read** (no interpreter, pytest not
+importable from it, a syntax error, a timeout), the scope is now `narrowed` with a
+"could not be read" signal, so the verdict caps at `UNPROVEN` rather than trusting
+a config nobody read.
+
+**What can change for you.** Verdicts only move toward `UNPROVEN`. Checked against
+pytest's own resolution on the pytest config of 53 popular projects (58 file
+combinations) and on click and more-itertools at 20 sampled commits each, the
+values read were identical to pytest's everywhere pytest 9.1 could read them, and
+no scope changed on click or more-itertools. Scope did change where the old reader
+had not been reading the config at all:
+
+- Projects using pytest 9's native `[tool.pytest]` table (seen in airflow, attrs,
+  fastapi, pydantic, pytest and pytest-django) or dotted `ini_options.*` keys
+  (tox) are now judged on what that config says, where they were previously
+  judged as unconfigured.
+- If your interpreter has a pytest older than 9 while the project uses a pytest 9
+  format, which that pytest ignores, the check now fails closed.
+- `poetry run pytest` and `uv run pytest` do not reveal their interpreter; if
+  `python3` lacks pytest, the config reads as unreadable. Name the environment's
+  interpreter instead: `.venv/bin/python -m pytest -q`.
+
 ## [0.4.7] - 2026-10-11
 
 ### Changed - a diff that weakens its own tests no longer earns `SAFE`
