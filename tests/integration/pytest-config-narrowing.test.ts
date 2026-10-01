@@ -282,3 +282,144 @@ describe('config that narrows nothing keeps its SAFE (#174)', () => {
     );
   }
 });
+
+function hasPytest9(): boolean {
+  try {
+    const v = execSync('python3 -c "import pytest; print(pytest.__version__)"', {
+      encoding: 'utf8',
+    });
+    return parseInt(v, 10) >= 9;
+  } catch {
+    return false;
+  }
+}
+
+// Review of #174. The scope must be judged on the config the tests gate actually
+// runs with: the shadow tree, after the diff, from an absolute root.
+describe('the config judged is the config the suite runs with (#174 review)', () => {
+  const verify = (repoRoot: string, testCmd = 'python3 -m pytest -q', diff = DIFF) =>
+    verifyDiff({ repoRoot, trusted: true, unifiedDiff: diff, testCmd });
+  const NARROWING_PYPROJECT = '[tool.pytest.ini_options]\naddopts = "-k test_a"\n';
+
+  it.skipIf(NO_PYTHON)(
+    'reads the config when repoRoot is relative',
+    async () => {
+      const root = await fixture('pytest.ini', '[pytest]\naddopts = -k test_a\n');
+      const cwd = process.cwd();
+      process.chdir(root);
+      try {
+        const report = await verify('.');
+        expect(report.verdict).not.toBe('SAFE');
+        expect(report.testScope.scope).toBe('narrowed');
+      } finally {
+        process.chdir(cwd);
+      }
+    },
+    240_000,
+  );
+
+  it.skipIf(NO_PYTHON)(
+    'ignores a pytest.ini symlinked from outside the repository, as the suite does',
+    async () => {
+      const root = await fixture('pyproject.toml', NARROWING_PYPROJECT);
+      const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cfg-outside-'));
+      roots.push(outside);
+      await fs.writeFile(path.join(outside, 'pytest.ini'), '[pytest]\naddopts = -q\n');
+      await fs.symlink(path.join(outside, 'pytest.ini'), path.join(root, 'pytest.ini'));
+      const report = await verify(root);
+      expect(report.verdict).not.toBe('SAFE');
+      expect(report.testScope.scope).toBe('narrowed');
+    },
+    240_000,
+  );
+
+  it.skipIf(NO_PYTHON)(
+    'ignores a pytest.ini symlinked into build/, which the suite never sees',
+    async () => {
+      const root = await fixture('pyproject.toml', NARROWING_PYPROJECT);
+      await fs.mkdir(path.join(root, 'build'));
+      await fs.writeFile(path.join(root, 'build', 'pytest.ini'), '[pytest]\naddopts = -q\n');
+      await fs.symlink('build/pytest.ini', path.join(root, 'pytest.ini'));
+      const report = await verify(root);
+      expect(report.verdict).not.toBe('SAFE');
+      expect(report.testScope.scope).toBe('narrowed');
+    },
+    240_000,
+  );
+
+  it.skipIf(NO_PYTHON)(
+    'reads the config as the diff leaves it',
+    async () => {
+      const root = await fixture('pytest.ini', '[pytest]\naddopts = -q\n');
+      const addsFilter = [
+        DIFF,
+        '--- a/pytest.ini',
+        '+++ b/pytest.ini',
+        '@@ -1,2 +1,2 @@',
+        ' [pytest]',
+        '-addopts = -q',
+        '+addopts = -k test_a',
+        '',
+      ].join('\n');
+      const report = await verify(root, 'python3 -m pytest -q', addsFilter);
+      expect(report.verdict).not.toBe('SAFE');
+      expect(report.testScope.scope).toBe('narrowed');
+      expect(report.testScope.signals.join(' ')).toContain('pytest.ini');
+    },
+    240_000,
+  );
+
+  it.skipIf(NO_PYTHON || hasPytest9())(
+    'fails closed end to end when the config cannot be read (a pytest 9 file, pytest 8)',
+    async () => {
+      // pytest 8 ignores pytest.toml and runs the whole suite; with a harmless
+      // change that would be SAFE. We cannot know which pytest the project
+      // expects, so the read is refused and the verdict caps.
+      const root = await fixture('pytest.toml', '[pytest]\naddopts = ["-k", "test_a"]\n');
+      const harmless = DIFF.replace('+    return a - b', '+    return b + a');
+      const report = await verify(root, 'python3 -m pytest -q', harmless);
+      expect(report.testScope.scope).toBe('narrowed');
+      expect(report.testScope.signals.join(' ')).toMatch(/pytest\.toml could not be read/);
+      expect(report.verdict).toBe('UNPROVEN');
+    },
+    240_000,
+  );
+});
+
+// Moves to `full` that are correct, each proven with the control shape: the
+// breaking change is caught (UNSAFE) because pytest really runs test_b.
+describe('config that pytest reads as whole-suite reads full (#174 review)', () => {
+  const CASES: ReadonlyArray<readonly [string, Record<string, string>]> = [
+    [
+      'an empty testpaths list',
+      { 'pyproject.toml': '[tool.pytest.ini_options]\ntestpaths = []\n' },
+    ],
+    [
+      'a narrowing setup.cfg that pytest.ini outranks',
+      {
+        'pytest.ini': '[pytest]\naddopts = -q\n',
+        'setup.cfg': '[tool:pytest]\naddopts = -k test_a\n',
+      },
+    ],
+  ];
+  for (const [label, files] of CASES) {
+    it.skipIf(NO_PYTHON)(
+      `${label}: test_b runs, so the break is caught`,
+      async () => {
+        const root = await fixture(null, '');
+        for (const [name, body] of Object.entries(files)) {
+          await fs.writeFile(path.join(root, name), body);
+        }
+        const report = await verifyDiff({
+          repoRoot: root,
+          trusted: true,
+          unifiedDiff: DIFF,
+          testCmd: 'python3 -m pytest -q',
+        });
+        expect(report.verdict).toBe('UNSAFE');
+        expect(report.testScope.scope).toBe('full');
+      },
+      240_000,
+    );
+  }
+});

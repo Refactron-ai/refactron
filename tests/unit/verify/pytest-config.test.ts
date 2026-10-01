@@ -54,15 +54,10 @@ const scopeWith = async (root: string, pythonBin: string, timeoutMs?: number) =>
     CMD,
     {},
     undefined,
-    await readPytestContext(
-      root,
-      CMD,
-      {},
-      {
-        pythonBin,
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      },
-    ),
+    await readPytestContext(root, CMD, {}, [], {
+      pythonBin,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    }),
   );
 
 describe('parsePytestConfigOutput accepts only the contract (#174)', () => {
@@ -194,7 +189,9 @@ describe('readPytestContext on a readable config (#174)', () => {
   it('reads nothing for a command that does not run pytest', async () => {
     // The nonexistent interpreter proves no spawn was attempted.
     expect(
-      await readPytestContext(tmp(), 'npx vitest run', {}, { pythonBin: '/nonexistent/python3' }),
+      await readPytestContext(tmp(), 'npx vitest run', {}, [], {
+        pythonBin: '/nonexistent/python3',
+      }),
     ).toEqual({ config: null, testFiles: null });
   });
 });

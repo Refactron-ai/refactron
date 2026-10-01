@@ -136,7 +136,9 @@ export async function detectWeakenedTests(
 // the old `python -m ` strip destroyed script-form commands such as Django's
 // `python3 tests/runtests.py`, which then measured no coverage at all.
 
-export async function verifyDiff(input: VerifyDiffInput): Promise<VerdictReport> {
+export async function verifyDiff(rawInput: VerifyDiffInput): Promise<VerdictReport> {
+  // Resolved once: the CLI passes '.', and the config sidecar runs from its own cwd.
+  const input = { ...rawInput, repoRoot: path.resolve(rawInput.repoRoot) };
   const edits =
     input.edits ??
     (input.unifiedDiff ? await editsFromUnifiedDiff(input.repoRoot, input.unifiedDiff) : []);
@@ -165,7 +167,7 @@ export async function verifyDiff(input: VerifyDiffInput): Promise<VerdictReport>
   // precondition. A narrowed suite already floors the verdict, so mutating it
   // would burn minutes for a decided verdict (ADR-15 perf; the tests-gate flaky
   // signal is the other half).
-  const testScope = await resolveTestScope(input);
+  const testScope = await resolveTestScope(input, edits);
   const flaky = (result.gates.tests as { flakySuspects?: unknown[] }).flakySuspects?.length ?? 0;
   // testWeakening also floors the verdict to UNPROVEN in fuseVerdict, so a weakened
   // diff can never reach SAFE — the deep checks (mutation/flaky) below only ever
@@ -220,14 +222,17 @@ export async function verifyDiff(input: VerifyDiffInput): Promise<VerdictReport>
  *  a vitest project - the exact thing docs/verification/verdicts.mdx promises it
  *  will not do. `detectRunner` is a few fs.access calls; the tests gate calls it
  *  again with the same inputs and gets the same answer. */
-async function resolveTestScope(input: VerifyDiffInput): Promise<TestScopeAssessment> {
+async function resolveTestScope(
+  input: VerifyDiffInput,
+  edits: FileEdit[],
+): Promise<TestScopeAssessment> {
   if (input.testCmd !== undefined && input.testCmd.trim() !== '') {
-    const pytestConfig = await readPytestContext(input.repoRoot, input.testCmd, process.env);
+    const pytestConfig = await readPytestContext(input.repoRoot, input.testCmd, process.env, edits);
     return assessTestScope(input.testCmd, process.env, undefined, pytestConfig);
   }
   const spec = await detectRunner(input.repoRoot);
   const detected = spec ? [spec.cmd, ...spec.args].join(' ') : undefined;
-  const pytestConfig = await readPytestContext(input.repoRoot, detected ?? '', process.env);
+  const pytestConfig = await readPytestContext(input.repoRoot, detected ?? '', process.env, edits);
   return assessTestScope(undefined, process.env, detected, pytestConfig);
 }
 
@@ -235,37 +240,54 @@ async function resolveTestScope(input: VerifyDiffInput): Promise<TestScopeAssess
  *  #174), read by the pytest_config.py sidecar under the interpreter the tests
  *  use. A command that does not run pytest reads nothing.
  *
- *  Configs above the repository root are ignored by the sidecar: the suite runs
- *  inside the shadow tree, whose parent is a temp directory, so such a file does
- *  not apply to the run we are judging.
+ *  Read from a shadow tree built exactly as the tests gate builds its own: the
+ *  diff applied, the same directories skipped, the same symlinks dropped. Reading
+ *  the caller's tree judged a different config than the suite ran with: a
+ *  pytest.ini symlinked from outside, or into build/, or one the diff edits.
  *
  *  Exported for direct testing of the fail-closed path. */
 export async function readPytestContext(
   repoRoot: string,
   command: string,
   env: Readonly<Record<string, string | undefined>>,
+  edits: FileEdit[] = [],
   opts: ReadPytestConfigOptions = {},
 ): Promise<PytestConfigContext> {
   const invocation = pytestInvocationOf(command, env);
   if (invocation === null) return { config: null, testFiles: null };
-  const read = await readPytestConfig(repoRoot, invocation, {
-    pythonBin: opts.pythonBin ?? testCommandInterpreter(command, repoRoot),
-    ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
-  });
-  if (!read.ok) {
-    return { config: null, unreadable: { file: read.file, reason: read.reason }, testFiles: null };
+  const root = path.resolve(repoRoot);
+  let shadow;
+  try {
+    shadow = await createShadowTree(root, toChanges(root, edits));
+  } catch {
+    return unreadableConfig('the repository could not be copied to read it');
   }
-  const config = {
-    file: read.file,
-    addopts: read.addopts,
-    testpaths: read.testpaths,
-    pythonFiles: read.pythonFiles,
-  };
-  // Walked ONLY when `testpaths` is set, the only question the list answers: the
-  // walk costs about a second on a large checkout.
-  const testFiles =
-    config.testpaths !== null && config.testpaths.length > 0 ? await findTestFiles(repoRoot) : null;
-  return { config, testFiles };
+  try {
+    const read = await readPytestConfig(shadow.path, invocation, {
+      pythonBin: opts.pythonBin ?? testCommandInterpreter(command, shadow.path),
+      ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+    });
+    if (!read.ok) return unreadableConfig(read.reason, read.file);
+    const config = {
+      file: read.file,
+      addopts: read.addopts,
+      testpaths: read.testpaths,
+      pythonFiles: read.pythonFiles,
+    };
+    // Walked ONLY when `testpaths` is set, the only question the list answers: the
+    // walk costs about a second on a large checkout.
+    const testFiles =
+      config.testpaths !== null && config.testpaths.length > 0
+        ? await findTestFiles(shadow.path)
+        : null;
+    return { config, testFiles };
+  } finally {
+    await shadow.cleanup();
+  }
+}
+
+function unreadableConfig(reason: string, file: string | null = null): PytestConfigContext {
+  return { config: null, unreadable: { file, reason }, testFiles: null };
 }
 
 /** Directories pytest would not collect from, or that would make the walk
