@@ -302,20 +302,86 @@ export function toCoverageRunArgs(
   return null;
 }
 
-/** The interpreter the tests gate's shell runs `testCmd` under, for sidecars that
- *  must see the same installed packages: a leading `pythonX.Y` (or a path to
- *  one, relative to `cwd`), else the resolved console script's shebang, else
- *  `python3`. */
-export function testCommandInterpreter(testCmd: string, cwd: string): string {
+/** The interpreter the tests gate's shell runs `testCmd` under, for a sidecar
+ *  that must see the same installed packages. Best effort: `unpinned` means it
+ *  could not be told (a wrapper such as `poetry run`, a shim, a composite), and
+ *  the caller must not depend on the guess. `refused` means the command names an
+ *  interpreter path outside `root`. */
+export type TestInterpreter =
+  | { kind: 'pinned'; bin: string }
+  | { kind: 'unpinned' }
+  | { kind: 'refused' };
+
+/** Commands that choose their own interpreter. Their console script's shebang
+ *  names the WRAPPER's Python, never the project's. */
+const INTERPRETER_WRAPPERS = new Set([
+  'env',
+  'poetry',
+  'uv',
+  'uvx',
+  'pipenv',
+  'pdm',
+  'hatch',
+  'rye',
+  'pixi',
+  'conda',
+  'tox',
+  'nox',
+  'npx',
+  'pnpm',
+  'yarn',
+  'bun',
+  'bunx',
+]);
+
+const PYTHON_NAME_RE = /^python[0-9.]*$/;
+
+export function testCommandInterpreter(testCmd: string, root: string): TestInterpreter {
+  const unpinned: TestInterpreter = { kind: 'unpinned' };
+  if (SHELL_COMPOSITE_RE.test(testCmd)) return unpinned;
   const tokens = tokenizeCommand(testCmd);
+  const env: Record<string, string> = {};
   let i = 0;
-  while (i < tokens.length && ASSIGNMENT_RE.test(tokens[i] ?? '')) i++;
-  const head = tokens[i] ?? '';
-  if (/^python[0-9.]*$/.test(path.basename(head))) {
-    return head.includes('/') ? path.resolve(cwd, head) : head;
+  for (; i < tokens.length; i++) {
+    const m = ASSIGNMENT_RE.exec(tokens[i] ?? '');
+    if (!m) break;
+    env[m[1] as string] = m[2] as string;
   }
-  if (SHELL_COMPOSITE_RE.test(testCmd)) return 'python3';
-  return toCoverageRunArgs(testCmd, resolveConsoleScript)?.interpreter ?? 'python3';
+  const head = tokens[i] ?? '';
+  const name = path.basename(head);
+  if (head === '' || INTERPRETER_WRAPPERS.has(name)) return unpinned;
+
+  if (head.includes('/') || head.includes('\\')) {
+    const abs = path.resolve(root, head);
+    const rel = path.relative(root, abs);
+    if (!path.isAbsolute(head) && (rel.startsWith('..') || path.isAbsolute(rel))) {
+      return { kind: 'refused' };
+    }
+    if (PYTHON_NAME_RE.test(name)) return { kind: 'pinned', bin: abs };
+    // A path-form console script (`.venv/bin/pytest`): its shebang is the answer.
+    const named = pythonShebangInterpreter(abs);
+    return named === null ? unpinned : pinnedName(named, env);
+  }
+  if (PYTHON_NAME_RE.test(name)) return pinnedName(head, env);
+  const resolved = resolveConsoleScript(head, env);
+  return resolved?.interpreter === undefined ? unpinned : pinnedName(resolved.interpreter, env);
+}
+
+/** A bare interpreter name is found through the command's own `PATH=` when it
+ *  hoists one, since our spawn would otherwise search a different PATH. */
+function pinnedName(bin: string, env: Record<string, string>): TestInterpreter {
+  if (path.isAbsolute(bin) || env.PATH === undefined) return { kind: 'pinned', bin };
+  for (const dir of env.PATH.split(path.delimiter)) {
+    if (dir === '' || !path.isAbsolute(dir)) return { kind: 'unpinned' };
+    const candidate = path.join(dir, bin);
+    try {
+      fsSync.accessSync(candidate, fsSync.constants.X_OK);
+      if (fsSync.statSync(candidate).isFile()) return { kind: 'pinned', bin: candidate };
+    } catch {
+      continue;
+    }
+  }
+  return { kind: 'unpinned' };
 }
 
 /** Find the file a shell would execute for a console entry point, and accept it
@@ -367,70 +433,73 @@ export function resolveConsoleScript(
     // consider: scanning past it to find a Python script further down would
     // run a different program than the gate did, which is precisely the
     // divergence this resolver exists to remove.
+    const interpreter = pythonShebangInterpreter(candidate);
+    return interpreter !== null ? { script: candidate, interpreter } : null;
+  }
+  return null;
+}
+
+/** The interpreter a Python script's shebang names, in the two shapes that can be
+ *  reproduced, or null for anything else (a shim, arguments, not Python). */
+function pythonShebangInterpreter(file: string): string | null {
+  try {
+    const fd = fsSync.openSync(file, 'r');
     try {
-      const fd = fsSync.openSync(candidate, 'r');
-      try {
-        const buf = Buffer.alloc(512);
-        const read = fsSync.readSync(fd, buf, 0, 512, 0);
-        const first = (buf.subarray(0, read).toString('utf8').split('\n')[0] ?? '').replace(
-          /\r$/,
-          '',
-        );
-        // Only a Python script can be handed to `coverage run` positionally.
-        // A shim (`#!/usr/bin/env bash`, pyenv and asdf install these), a
-        // native launcher (Windows `.exe`), or a shebang we cannot read is not
-        // one, and the caller declines rather than substituting module form.
-        if (first.startsWith('#!') && /python/i.test(first)) {
-          // Exactly two shebang shapes are reproducible. Everything else
-          // declines, because we run `<interpreter> -m coverage run <script>`
-          // and can only claim equivalence when that is what the kernel would
-          // have done.
-          //
-          //   #!/abs/path/to/python          one word   -> run under it
-          //   #!/usr/bin/env python3         two words  -> PATH resolves the
-          //                                               same for us, so the
-          //                                               caller's python stands
-          //
-          // A shebang carrying ARGUMENTS is refused, and that is the important
-          // case rather than a tidiness rule. `-E`, `-s`, `-I` change which
-          // paths Python trusts: `-E` makes it ignore PYTHONPATH entirely. The
-          // gate execs the script so the kernel applies those flags; dropping
-          // them here would let the gate import the INSTALLED copy while
-          // coverage imports the SHADOW copy and measures it as covered, and
-          // fusing those yields SAFE for a change no test ran. Fedora and RHEL
-          // ship `#!/usr/bin/python3 -s` as their packaging default, so this is
-          // a real shape, not a hypothetical one.
-          //
-          // Forwarding a flag whitelist is deliberately NOT done. It is
-          // plausibly sound for -E and -s and definitely unsound for -S, which
-          // would break importing coverage itself, and the rule at the top of
-          // this file says features are taught here only when equivalence can
-          // be proven.
-          const words = first.slice(2).trim().split(/\s+/).filter(Boolean);
-          const head0 = words[0] ?? '';
-          if (/(^|\/)env$/.test(head0)) {
-            // `env python3` and nothing more. `env -S ...` re-splits the line
-            // and is not reproduced.
-            const named = words[1] ?? '';
-            // Carry the NAME, not nothing. `env python3.11` is a different
-            // binary from our `python3`, and running the script under ours is
-            // the very mismatch this resolves. A bare name is resolved by the
-            // spawn through the same PATH the shell would have searched.
-            return words.length === 2 && /python/i.test(named)
-              ? { script: candidate, interpreter: named }
-              : null;
-          }
-          return words.length === 1 && path.isAbsolute(head0)
-            ? { script: candidate, interpreter: head0 }
-            : null;
+      const buf = Buffer.alloc(512);
+      const read = fsSync.readSync(fd, buf, 0, 512, 0);
+      const first = (buf.subarray(0, read).toString('utf8').split('\n')[0] ?? '').replace(
+        /\r$/,
+        '',
+      );
+      // Only a Python script can be handed to `coverage run` positionally.
+      // A shim (`#!/usr/bin/env bash`, pyenv and asdf install these), a
+      // native launcher (Windows `.exe`), or a shebang we cannot read is not
+      // one, and the caller declines rather than substituting module form.
+      if (first.startsWith('#!') && /python/i.test(first)) {
+        // Exactly two shebang shapes are reproducible. Everything else
+        // declines, because we run `<interpreter> -m coverage run <script>`
+        // and can only claim equivalence when that is what the kernel would
+        // have done.
+        //
+        //   #!/abs/path/to/python          one word   -> run under it
+        //   #!/usr/bin/env python3         two words  -> PATH resolves the
+        //                                               same for us, so the
+        //                                               caller's python stands
+        //
+        // A shebang carrying ARGUMENTS is refused, and that is the important
+        // case rather than a tidiness rule. `-E`, `-s`, `-I` change which
+        // paths Python trusts: `-E` makes it ignore PYTHONPATH entirely. The
+        // gate execs the script so the kernel applies those flags; dropping
+        // them here would let the gate import the INSTALLED copy while
+        // coverage imports the SHADOW copy and measures it as covered, and
+        // fusing those yields SAFE for a change no test ran. Fedora and RHEL
+        // ship `#!/usr/bin/python3 -s` as their packaging default, so this is
+        // a real shape, not a hypothetical one.
+        //
+        // Forwarding a flag whitelist is deliberately NOT done. It is
+        // plausibly sound for -E and -s and definitely unsound for -S, which
+        // would break importing coverage itself, and the rule at the top of
+        // this file says features are taught here only when equivalence can
+        // be proven.
+        const words = first.slice(2).trim().split(/\s+/).filter(Boolean);
+        const head0 = words[0] ?? '';
+        if (/(^|\/)env$/.test(head0)) {
+          // `env python3` and nothing more. `env -S ...` re-splits the line
+          // and is not reproduced.
+          const named = words[1] ?? '';
+          // Carry the NAME, not nothing. `env python3.11` is a different
+          // binary from our `python3`, and running the script under ours is
+          // the very mismatch this resolves. A bare name is resolved by the
+          // spawn through the same PATH the shell would have searched.
+          return words.length === 2 && /python/i.test(named) ? named : null;
         }
-      } finally {
-        fsSync.closeSync(fd);
+        return words.length === 1 && path.isAbsolute(head0) ? head0 : null;
       }
-    } catch {
-      // unreadable: treat as not resolvable
+    } finally {
+      fsSync.closeSync(fd);
     }
-    return null;
+  } catch {
+    // unreadable: treat as not resolvable
   }
   return null;
 }

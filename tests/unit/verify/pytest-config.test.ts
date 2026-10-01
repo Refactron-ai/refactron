@@ -197,29 +197,76 @@ describe('readPytestContext on a readable config (#174)', () => {
 });
 
 describe('testCommandInterpreter picks the interpreter the tests run under (#174)', () => {
+  const pinned = (bin: string) => ({ kind: 'pinned', bin });
+  const UNPINNED = { kind: 'unpinned' };
+
   it.each([
     ['python3 -m pytest -q', 'python3'],
     ['python3.11 -m pytest -q', 'python3.11'],
     ['PYTHONPATH=. python3.12 -m pytest', 'python3.12'],
     ['/opt/venv/bin/python -m pytest', '/opt/venv/bin/python'],
-    ['make test', 'python3'],
-    ['pytest -q && lint', 'python3'],
   ])('%s -> %s', (cmd, expected) => {
-    expect(testCommandInterpreter(cmd, '/repo')).toBe(expected);
+    expect(testCommandInterpreter(cmd, '/repo')).toEqual(pinned(expected));
   });
 
-  it('resolves a relative interpreter against the repository', () => {
-    expect(testCommandInterpreter('.venv/bin/python -m pytest', '/repo')).toBe(
-      path.resolve('/repo', '.venv/bin/python'),
+  it.each([
+    'make test',
+    'pytest -q && lint',
+    'poetry run pytest -q',
+    'uv run pytest',
+    'pipenv run pytest',
+    'pdm run pytest',
+    'hatch run test',
+    'rye run pytest',
+    'env PYTHONPATH=. python3 -m pytest',
+  ])('cannot tell for %s', (cmd) => {
+    expect(testCommandInterpreter(cmd, '/repo')).toEqual(UNPINNED);
+  });
+
+  it('resolves a relative interpreter against the root it is given', () => {
+    expect(testCommandInterpreter('.venv/bin/python -m pytest', '/repo')).toEqual(
+      pinned(path.resolve('/repo', '.venv/bin/python')),
     );
+  });
+
+  it('refuses a relative interpreter that leaves the root', () => {
+    expect(testCommandInterpreter('../elsewhere/bin/python -m pytest', '/repo')).toEqual({
+      kind: 'refused',
+    });
+  });
+
+  it.skipIf(WINDOWS)('finds a bare interpreter through a hoisted PATH', () => {
+    const bin = tmp();
+    fs.writeFileSync(path.join(bin, 'python3'), '#!/bin/sh\n');
+    fs.chmodSync(path.join(bin, 'python3'), 0o755);
+    expect(testCommandInterpreter(`PATH=${bin} python3 -m pytest`, '/repo')).toEqual(
+      pinned(path.join(bin, 'python3')),
+    );
+    expect(testCommandInterpreter(`PATH=${tmp()} python3 -m pytest`, '/repo')).toEqual(UNPINNED);
   });
 
   it.skipIf(WINDOWS)("follows a console script's shebang, as coverage does", () => {
     const bin = tmp();
     fs.writeFileSync(path.join(bin, 'pytest'), '#!/opt/tool/bin/python3.12\nimport pytest\n');
     fs.chmodSync(path.join(bin, 'pytest'), 0o755);
-    expect(testCommandInterpreter(`PATH=${bin} pytest -q`, '/repo')).toBe(
-      '/opt/tool/bin/python3.12',
+    expect(testCommandInterpreter(`PATH=${bin} pytest -q`, '/repo')).toEqual(
+      pinned('/opt/tool/bin/python3.12'),
     );
+  });
+
+  it.skipIf(WINDOWS)('reads the shebang of a path-form console script under the root', () => {
+    const root = tmp({ '.venv/bin/pytest': '#!/opt/venv/bin/python3.11\nimport pytest\n' });
+    expect(testCommandInterpreter('.venv/bin/pytest -q', root)).toEqual(
+      pinned('/opt/venv/bin/python3.11'),
+    );
+    const shim = tmp({ 'bin/pytest': '#!/usr/bin/env bash\nexec pyenv exec pytest "$@"\n' });
+    expect(testCommandInterpreter('bin/pytest -q', shim)).toEqual(UNPINNED);
+  });
+
+  it.skipIf(WINDOWS)("never takes a wrapper's own shebang interpreter", () => {
+    const bin = tmp();
+    fs.writeFileSync(path.join(bin, 'poetry'), '#!/opt/poetry/venv/bin/python\n');
+    fs.chmodSync(path.join(bin, 'poetry'), 0o755);
+    expect(testCommandInterpreter(`PATH=${bin} poetry run pytest`, '/repo')).toEqual(UNPINNED);
   });
 });

@@ -263,8 +263,13 @@ export async function readPytestContext(
     return unreadableConfig('the repository could not be copied to read it');
   }
   try {
+    // Best effort: an unpinned command falls back to python3.
+    const interpreter = testCommandInterpreter(command, shadow.path);
+    if (interpreter.kind === 'refused') {
+      return unreadableConfig('the test command names an interpreter outside the repository');
+    }
     const read = await readPytestConfig(shadow.path, invocation, {
-      pythonBin: opts.pythonBin ?? testCommandInterpreter(command, shadow.path),
+      pythonBin: opts.pythonBin ?? (interpreter.kind === 'pinned' ? interpreter.bin : 'python3'),
       ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     });
     if (!read.ok) return unreadableConfig(read.reason, read.file);
