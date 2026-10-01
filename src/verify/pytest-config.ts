@@ -22,6 +22,26 @@ export interface PytestInvocation {
   envAddopts: string | null;
 }
 
+/** Characters the shell rewrites before pytest sees them: `$` expansion, `\`
+ *  escapes and glob metacharacters. We hold the text, not the expansion, so a
+ *  config read through it could be a different file: unknown is honest, a
+ *  mismatch is not (the rule toCoverageRunArgs applies to the same command). */
+const SHELL_REWRITES_RE = /[$\\*?[]/;
+
+/** Why an invocation cannot be read faithfully, or null when it can. */
+export function invocationRefusal(invocation: PytestInvocation): string | null {
+  const addopts = (invocation.envAddopts ?? '').split(/\s+/).filter(Boolean);
+  const tokens = [...invocation.args, ...addopts];
+  if (tokens.some((t) => SHELL_REWRITES_RE.test(t) || t.startsWith('~'))) {
+    return 'the command uses shell syntax ($, ~, a glob or a backslash) that the shell rewrites';
+  }
+  // pytest >= 8.2 reads further arguments from an @file.
+  if (tokens.some((t) => t.startsWith('@'))) {
+    return 'the command reads arguments from an @file';
+  }
+  return null;
+}
+
 export type PytestConfigRead =
   | {
       ok: true;

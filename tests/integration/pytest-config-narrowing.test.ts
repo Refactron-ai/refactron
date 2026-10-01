@@ -380,6 +380,41 @@ describe('the config judged is the config the suite runs with (#174 review)', ()
     240_000,
   );
 
+  it.skipIf(NO_PYTHON)(
+    'refuses a config argument the shell would expand',
+    async () => {
+      const root = await fixture('ci.ini', '[pytest]\naddopts = -k test_a\n');
+      process.env.REFACTRON_TEST_CFG = 'ci.ini';
+      try {
+        const report = await verify(root, 'python3 -m pytest -q -c $REFACTRON_TEST_CFG');
+        expect(report.verdict).not.toBe('SAFE');
+        expect(report.testScope.scope).toBe('narrowed');
+        expect(report.testScope.signals.join(' ')).toMatch(/could not be read/);
+      } finally {
+        delete process.env.REFACTRON_TEST_CFG;
+      }
+    },
+    240_000,
+  );
+
+  it.skipIf(NO_PYTHON)(
+    'judges PYTEST_ADDOPTS as the suite receives it, after secret redaction',
+    async () => {
+      // The gate drops a value shaped like a token, so the suite runs whole and
+      // catches the break; reading the raw value would claim a narrowed run.
+      const root = await fixture(null, '');
+      process.env.PYTEST_ADDOPTS = 'ghp_FAKE0123456789abcdef -k test_a';
+      try {
+        const report = await verify(root);
+        expect(report.verdict).toBe('UNSAFE');
+        expect(report.testScope.scope).toBe('full');
+      } finally {
+        delete process.env.PYTEST_ADDOPTS;
+      }
+    },
+    240_000,
+  );
+
   it.skipIf(NO_PYTHON || hasPytest9())(
     'fails closed end to end when the config cannot be read (a pytest 9 file, pytest 8)',
     async () => {

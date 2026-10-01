@@ -23,7 +23,12 @@ import {
   type PytestConfigContext,
   type TestScopeAssessment,
 } from './test-scope.js';
-import { readPytestConfig, type ReadPytestConfigOptions } from './pytest-config.js';
+import {
+  invocationRefusal,
+  readPytestConfig,
+  type ReadPytestConfigOptions,
+} from './pytest-config.js';
+import { redactEnvForRunner } from './runners/run.js';
 import { testCommandInterpreter } from '../analyze/coverage/python-line-coverage.js';
 import { detectRunner } from './runners/detect.js';
 import { ENGINE_VERSION } from '../engine-version.js';
@@ -226,14 +231,17 @@ async function resolveTestScope(
   input: VerifyDiffInput,
   edits: FileEdit[],
 ): Promise<TestScopeAssessment> {
+  // The environment the tests gate hands the suite, so PYTEST_ADDOPTS is judged
+  // as the run sees it.
+  const env = redactEnvForRunner(process.env);
   if (input.testCmd !== undefined && input.testCmd.trim() !== '') {
-    const pytestConfig = await readPytestContext(input.repoRoot, input.testCmd, process.env, edits);
-    return assessTestScope(input.testCmd, process.env, undefined, pytestConfig);
+    const pytestConfig = await readPytestContext(input.repoRoot, input.testCmd, env, edits);
+    return assessTestScope(input.testCmd, env, undefined, pytestConfig);
   }
   const spec = await detectRunner(input.repoRoot);
   const detected = spec ? [spec.cmd, ...spec.args].join(' ') : undefined;
-  const pytestConfig = await readPytestContext(input.repoRoot, detected ?? '', process.env, edits);
-  return assessTestScope(undefined, process.env, detected, pytestConfig);
+  const pytestConfig = await readPytestContext(input.repoRoot, detected ?? '', env, edits);
+  return assessTestScope(undefined, env, detected, pytestConfig);
 }
 
 /** The pytest configuration `command` runs under, as pytest resolves it (#137,
@@ -255,6 +263,8 @@ export async function readPytestContext(
 ): Promise<PytestConfigContext> {
   const invocation = pytestInvocationOf(command, env);
   if (invocation === null) return { config: null, testFiles: null };
+  const refusal = invocationRefusal(invocation);
+  if (refusal !== null) return unreadableConfig(refusal);
   const root = path.resolve(repoRoot);
   let shadow;
   try {

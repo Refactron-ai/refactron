@@ -8,7 +8,7 @@ import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { parsePytestConfigOutput } from '../../../src/verify/pytest-config.js';
+import { invocationRefusal, parsePytestConfigOutput } from '../../../src/verify/pytest-config.js';
 import { readPytestContext } from '../../../src/verify/verify-diff.js';
 import { assessTestScope } from '../../../src/verify/test-scope.js';
 import { testCommandInterpreter } from '../../../src/analyze/coverage/python-line-coverage.js';
@@ -295,5 +295,43 @@ describe('testCommandInterpreter picks the interpreter the tests run under (#174
     fs.writeFileSync(path.join(bin, 'poetry'), '#!/opt/poetry/venv/bin/python\n');
     fs.chmodSync(path.join(bin, 'poetry'), 0o755);
     expect(testCommandInterpreter(`PATH=${bin} poetry run pytest`, '/repo')).toEqual(UNPINNED);
+  });
+});
+
+// Review of #174: what the shell rewrites, or pytest expands from a file, is not
+// the text we hold, so reading config through it could read a different file.
+describe('invocationRefusal (#174 review)', () => {
+  it.each([
+    [['-c', '$CFG'], null],
+    [['-c', '${CFG}'], null],
+    [['-c', '~/ci.ini'], null],
+    [['-c', 'c?.ini'], null],
+    [['-c', 'c*.ini'], null],
+    [['-c', '[ab].ini'], null],
+    [['-c', 'ci\\.ini'], null],
+    [['-q'], '-c $CFG'],
+    [['-q'], '-c ~/ci.ini'],
+  ])('refuses shell syntax: %j with PYTEST_ADDOPTS %j', (args, envAddopts) => {
+    expect(invocationRefusal({ args, envAddopts })).toMatch(/shell syntax/);
+  });
+
+  it('refuses an @file argument', () => {
+    expect(invocationRefusal({ args: ['-q', '@args.txt'], envAddopts: null })).toMatch(/@file/);
+    expect(invocationRefusal({ args: [], envAddopts: '-q @more' })).toMatch(/@file/);
+  });
+
+  it.each([
+    [['-q'], null],
+    [['-q', '-c', 'ci.ini', '--rootdir=.', '-o', 'addopts=-x'], '--tb=short'],
+    [['--cov=src', '-p', 'no:cacheprovider'], null],
+  ])('leaves %j alone', (args, envAddopts) => {
+    expect(invocationRefusal({ args, envAddopts })).toBeNull();
+  });
+
+  it('turns a refusal into an unreadable config without spawning', async () => {
+    const ctx = await readPytestContext(tmp(), 'python3 -m pytest -c $CFG', {}, [], {
+      pythonBin: '/nonexistent/python3',
+    });
+    expect(ctx.unreadable?.reason).toMatch(/shell syntax/);
   });
 });
