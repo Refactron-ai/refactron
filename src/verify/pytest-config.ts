@@ -50,6 +50,29 @@ function optionalString(v: unknown): v is string | null {
   return v === null || typeof v === 'string';
 }
 
+/** The sidecar reports a reason CLASS, never exception text: a parser error
+ *  echoes the offending config line, which can hold a secret. */
+const REASON_TEXT: Readonly<Record<string, string>> = {
+  'bad-request': 'the config reader rejected its request',
+  'relative-root': 'the config reader was given a relative root',
+  'not-a-directory': 'the repository root is not a directory',
+  'pytest-not-importable': 'pytest is not importable by the interpreter running the tests',
+  'unsupported-pytest': 'this pytest is newer than the config reader supports',
+  'config-syntax': 'pytest cannot parse it',
+  'pytest9-format': 'it is a pytest 9 format and the installed pytest is older',
+  'version-dependent': 'which settings apply depends on the pytest version',
+  'bad-option': "the command's config options could not be resolved",
+  'argument-file': 'the command reads arguments from an @file',
+  'bad-value': 'a value is not in the form pytest requires',
+  'internal-error': 'the config reader failed',
+};
+
+/** A repo-relative name only: never a host path. */
+function safeFileName(file: string | null): string | null {
+  if (file === null) return null;
+  return path.isAbsolute(file) || file.split(/[\\/]/).includes('..') ? path.basename(file) : file;
+}
+
 /** Validate the sidecar's JSON. Anything off-contract is a failure, never a
  *  partial answer. */
 export function parsePytestConfigOutput(stdout: string): PytestConfigRead {
@@ -63,10 +86,10 @@ export function parsePytestConfigOutput(stdout: string): PytestConfigRead {
     return { ok: false, file: null, reason: 'the config reader produced unexpected output' };
   }
   const o = parsed as Record<string, unknown>;
-  const file = optionalString(o.config_file) ? o.config_file : null;
+  const file = optionalString(o.config_file) ? safeFileName(o.config_file) : null;
   if (o.ok === false) {
-    const reason = typeof o.error === 'string' && o.error !== '' ? o.error : 'unknown error';
-    return { ok: false, file, reason };
+    const reason = typeof o.error === 'string' ? REASON_TEXT[o.error] : undefined;
+    return { ok: false, file, reason: reason ?? 'the config reader produced unexpected output' };
   }
   if (
     o.ok === true &&
@@ -77,7 +100,7 @@ export function parsePytestConfigOutput(stdout: string): PytestConfigRead {
   ) {
     return {
       ok: true,
-      file: o.config_file,
+      file: safeFileName(o.config_file),
       addopts: o.addopts,
       testpaths: o.testpaths,
       pythonFiles: o.python_files,
@@ -99,7 +122,8 @@ export async function readPytestConfig(
   try {
     // Neutral cwd, base environment and -E (ADR-17): nothing in the repository
     // may shadow pytest's modules, and -E also refuses a PYTHONPATH sitecustomize.
-    const result = await execa(opts.pythonBin ?? 'python3', ['-E', SIDECAR], {
+    // -B leaves no bytecode behind in the shadow or the install.
+    const result = await execa(opts.pythonBin ?? 'python3', ['-E', '-B', SIDECAR], {
       input,
       cwd: SIDECAR_DIR,
       env: redactEnvForRunner(process.env),
@@ -112,27 +136,14 @@ export async function readPytestConfig(
       return { ok: false, file: null, reason: 'the config reader timed out' };
     }
     if (result.failed && result.exitCode === undefined) {
-      // A spawn failure (no such interpreter) carries its reason only on the error shape.
-      const why = 'shortMessage' in result ? String(result.shortMessage).split('\n')[0] : '';
-      return {
-        ok: false,
-        file: null,
-        reason: `the config reader could not run${why ? `: ${why}` : ''}`,
-      };
+      return { ok: false, file: null, reason: 'the interpreter could not be started' };
     }
     const read = parsePytestConfigOutput(result.stdout);
     if (result.exitCode !== 0 && read.ok) {
       return { ok: false, file: read.file, reason: `the config reader exited ${result.exitCode}` };
     }
-    if (!read.ok && read.reason.includes('produced') && result.stderr.trim() !== '') {
-      return { ...read, reason: `${read.reason}: ${result.stderr.trim().slice(0, 200)}` };
-    }
     return read;
-  } catch (err) {
-    return {
-      ok: false,
-      file: null,
-      reason: `the config reader could not run: ${err instanceof Error ? err.message : String(err)}`,
-    };
+  } catch {
+    return { ok: false, file: null, reason: 'the interpreter could not be started' };
   }
 }

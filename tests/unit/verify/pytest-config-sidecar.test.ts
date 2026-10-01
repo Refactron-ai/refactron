@@ -264,8 +264,7 @@ describe('pytest_config.py reads what pytest reads (#174)', () => {
     expect(r.config_file).toBe('setup.cfg');
   });
 
-  it.skipIf(NO_PYTEST)('ignores a config above the repository root', () => {
-    // The suite runs in a copy whose parent is a temp dir; this file is not there.
+  it.skipIf(NO_PYTEST)('reads only files inside the root it is given', () => {
     const outer = repo({ 'pytest.ini': '[pytest]\naddopts = -k fast\n' });
     fs.mkdirSync(path.join(outer, 'repo'));
     const r = run(path.join(outer, 'repo'));
@@ -330,13 +329,22 @@ describe('pytest_config.py honours the command line (#174)', () => {
 
 describe('pytest 9 config formats (#174)', () => {
   it.skipIf(!PYTEST9)('pytest 9 reads pytest.toml first', () => {
+    // Values agree with pytest.ini, so no older generation would read otherwise.
     const r = run(
+      repo({
+        'pytest.toml': '[pytest]\naddopts = ["-k", "fast"]\n',
+        'pytest.ini': '[pytest]\naddopts = -k fast\n',
+      }),
+    );
+    expect(r).toMatchObject({ ok: true, config_file: 'pytest.toml', addopts: ['-k', 'fast'] });
+    // A pytest.ini that disagrees would be read by pytest 8: refused.
+    const skew = run(
       repo({
         'pytest.toml': '[pytest]\naddopts = ["-k", "fast"]\n',
         'pytest.ini': '[pytest]\naddopts = -q\n',
       }),
     );
-    expect(r).toMatchObject({ ok: true, config_file: 'pytest.toml', addopts: ['-k', 'fast'] });
+    expect(skew).toMatchObject({ ok: false, error: 'version-dependent' });
   });
 
   it.skipIf(!PYTEST9)('pytest 9 reads .pytest.toml and a native [tool.pytest] table', () => {
@@ -367,7 +375,7 @@ describe('pytest 9 config formats (#174)', () => {
       const r = run(repo({ [file]: body, 'pytest.ini': '[pytest]\naddopts = -q\n' }));
       expect(r.ok).toBe(false);
       expect(r.config_file).toBe(file);
-      expect(r.error).toMatch(/pytest 9/);
+      expect(r.error).toBe('pytest9-format');
     }
   });
 });
@@ -407,14 +415,14 @@ describe('pytest_config.py fails closed, with a reason (#174)', () => {
       expect(r.exit).toBe(0);
       expect(r.ok).toBe(false);
       expect(r.config_file).toBe(file);
-      expect(r.error).toBeTruthy();
+      expect(['config-syntax', 'bad-value', 'bad-option']).toContain(r.error);
     });
   }
 
   it.skipIf(NO_PYTEST)('a -c that climbs out of the repository', () => {
     const r = run(repo({ 'pytest.ini': '[pytest]\n' }), ['-c', '../elsewhere.ini']);
     expect(r).toMatchObject({ ok: false });
-    expect(r.error).toMatch(/outside the repository/);
+    expect(r.error).toBe('bad-option');
   });
 
   it.skipIf(NO_PYTEST)('a request that is not JSON exits 2 with a reason', () => {
@@ -429,7 +437,7 @@ describe('pytest_config.py fails closed, with a reason (#174)', () => {
       pyArgs: ['-I', '-S'],
     });
     expect(r.ok).toBe(false);
-    expect(r.error).toMatch(/importable/);
+    expect(r.error).toBe('pytest-not-importable');
   });
 });
 
@@ -469,7 +477,7 @@ describe('the fallback reader, when pytest cannot be asked (#174)', () => {
     );
     expect(r.ok).toBe(false);
     // Below Python 3.11 the isolated path has no TOML parser: refused either way.
-    expect(r.error).toMatch(/depends on its version|no TOML parser/);
+    expect(['version-dependent', 'pytest-not-importable']).toContain(r.error);
   });
 });
 
@@ -488,5 +496,119 @@ describe('pytest_config.py runs no project code (#174)', () => {
     const r = run(root, ['-q'], { cwd: root, env: { ...process.env, PYTHONPATH: '.' } });
     expect(r.ok).toBe(true);
     expect(fs.readdirSync(root).filter((f) => f.endsWith('.ran'))).toEqual([]);
+  });
+});
+
+// Review of #174. The interpreter running the tests is found on a best-effort
+// basis, so an answer that would differ under another pytest generation is
+// refused rather than trusted.
+describe('pytest_config.py refuses an answer that depends on the pytest version', () => {
+  it.skipIf(NO_PYTEST)('pytest.toml against a narrowing pyproject.toml', () => {
+    const r = run(
+      repo({
+        'pytest.toml': '[pytest]\naddopts = ["-q"]\n',
+        'pyproject.toml': '[tool.pytest.ini_options]\naddopts = "-k fast"\n',
+      }),
+    );
+    expect(r).toMatchObject({ ok: false });
+    expect(['version-dependent', 'pytest9-format']).toContain(r.error);
+  });
+
+  it.skipIf(NO_PYTEST)(
+    '.pytest.ini, which pytest 6 skips, against a narrowing pyproject.toml',
+    () => {
+      const r = run(
+        repo({
+          '.pytest.ini': '[pytest]\naddopts = -q\n',
+          'pyproject.toml': '[tool.pytest.ini_options]\naddopts = "-k fast"\n',
+        }),
+      );
+      expect(r).toMatchObject({ ok: false, error: 'version-dependent' });
+    },
+  );
+
+  it.skipIf(NO_PYTEST)('a native [tool.pytest] table over a narrowing setup.cfg', () => {
+    const r = run(
+      repo({
+        'pyproject.toml': '[tool.pytest]\naddopts = ["-q"]\n',
+        'setup.cfg': '[tool:pytest]\naddopts = -k fast\n',
+      }),
+    );
+    expect(r.ok).toBe(false);
+    expect(['version-dependent', 'pytest9-format']).toContain(r.error);
+  });
+
+  it.skipIf(NO_PYTEST)('accepts a generation that reads nothing: it cannot narrow', () => {
+    // pytest 6 does not read .pytest.ini, so it would run with no config at all.
+    const r = run(repo({ '.pytest.ini': '[pytest]\naddopts = -k fast\n' }));
+    if (PYTEST7) expect(r).toMatchObject({ ok: true, addopts: ['-k', 'fast'] });
+    else expect(r).toMatchObject({ ok: false, error: 'version-dependent' });
+  });
+
+  it.skipIf(NO_PYTEST)('accepts files that differ only in name when the values agree', () => {
+    const r = run(
+      repo({
+        'pytest.ini': '[pytest]\naddopts = -q\n',
+        'setup.cfg': '[tool:pytest]\naddopts = -q\n',
+      }),
+    );
+    expect(r).toMatchObject({ ok: true, config_file: 'pytest.ini' });
+  });
+
+  it.skipIf(NO_PYTEST)('has no adapter for a pytest newer than 9 in the fallback', () => {
+    const program =
+      `import runpy, json; m = runpy.run_path(${JSON.stringify(SIDECAR)}); ` +
+      'R = m["Refusal"]\n' +
+      'try:\n    m["generation_for"]("10.0"); print("accepted")\n' +
+      'except R as e:\n    print(e.reason)';
+    const out = execFileSync(PY, ['-c', program], { encoding: 'utf8' }).trim();
+    expect(out).toBe('unsupported-pytest');
+  });
+});
+
+describe('pytest_config.py guards (#174 review)', () => {
+  it.skipIf(NO_PYTEST)(
+    "uses pytest's own resolution for the installed pytest, not the fallback",
+    () => {
+      // A pytest upgrade that changes determine_setup must fail here, not slip
+      // silently onto the fallback.
+      const r = run(repo({ 'pytest.ini': '[pytest]\naddopts = -q\n' })) as Result & {
+        resolver?: string;
+      };
+      expect(r.resolver).toBe('pytest');
+    },
+  );
+
+  it.skipIf(NO_PYTEST)('refuses an @file argument, which pytest >= 8.2 would expand', () => {
+    const root = repo({ 'pytest.ini': '[pytest]\n', 'args.txt': '-c ci.ini\n' });
+    expect(run(root, ['-q', '@args.txt'])).toMatchObject({ ok: false, error: 'argument-file' });
+    expect(run(root, ['-q'], { envAddopts: '@args.txt' })).toMatchObject({
+      error: 'argument-file',
+    });
+  });
+
+  it.skipIf(NO_PYTEST)('refuses a relative root', () => {
+    const r = spawnSync(PY, [SIDECAR], {
+      input: JSON.stringify({ root: '.', args: [] }),
+      encoding: 'utf8',
+    });
+    expect(r.status).toBe(2);
+    expect(JSON.parse(r.stdout)).toMatchObject({ ok: false, error: 'relative-root' });
+  });
+
+  it.skipIf(NO_PYTEST)('never echoes config content or a host path in a refusal', () => {
+    const token = 'ghp_FAKEtoken0123456789abcdefFAKE';
+    const root = repo({ 'tox.ini': `${token} = oops\nnot a line\n[pytest]\n` });
+    const r = run(root);
+    const raw = JSON.stringify(r);
+    expect(r).toMatchObject({ ok: false, config_file: 'tox.ini', error: 'config-syntax' });
+    expect(raw).not.toContain(token);
+    expect(raw).not.toContain(root);
+  });
+
+  it.skipIf(NO_PYTEST)('names an absolute -c outside the root by its basename only', () => {
+    const outside = repo({ 'ci.ini': '[pytest]\naddopts = -k fast\n' });
+    const r = run(repo({}), ['-c', path.join(outside, 'ci.ini')]);
+    expect(r).toMatchObject({ ok: true, config_file: 'ci.ini', addopts: ['-k', 'fast'] });
   });
 });

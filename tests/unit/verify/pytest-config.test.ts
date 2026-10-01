@@ -81,10 +81,26 @@ describe('parsePytestConfigOutput accepts only the contract (#174)', () => {
     });
   });
 
-  it('carries the sidecar reason and file on failure', () => {
+  it('turns the sidecar reason class into text and keeps the file', () => {
     expect(
-      parsePytestConfigOutput('{"ok": false, "config_file": "tox.ini", "error": "bad line"}'),
-    ).toEqual({ ok: false, file: 'tox.ini', reason: 'bad line' });
+      parsePytestConfigOutput('{"ok": false, "config_file": "tox.ini", "error": "config-syntax"}'),
+    ).toEqual({ ok: false, file: 'tox.ini', reason: 'pytest cannot parse it' });
+  });
+
+  it('never passes free text or a host path through', () => {
+    const leaky = parsePytestConfigOutput(
+      JSON.stringify({ ok: false, config_file: '/home/u/secret/ci.ini', error: 'token=abc123' }),
+    );
+    expect(leaky).toEqual({
+      ok: false,
+      file: 'ci.ini',
+      reason: 'the config reader produced unexpected output',
+    });
+    expect(
+      parsePytestConfigOutput(
+        JSON.stringify({ ok: false, config_file: '../../etc/x.ini', error: 'config-syntax' }),
+      ),
+    ).toMatchObject({ file: 'x.ini' });
   });
 
   it.each([
@@ -104,7 +120,7 @@ describe('readPytestContext fails closed (#174)', () => {
   it('when the interpreter does not exist', async () => {
     const a = await scopeWith(tmp({ 'pytest.ini': '[pytest]\n' }), '/nonexistent/python3');
     expect(a.scope).toBe('narrowed');
-    expect(a.signals.join(' ')).toMatch(/could not be read.*could not run/);
+    expect(a.signals.join(' ')).toMatch(/could not be read.*could not be started/);
   });
 
   it.skipIf(WINDOWS)('when the reader hangs', async () => {
@@ -156,6 +172,17 @@ describe('readPytestContext fails closed (#174)', () => {
     expect(a.signals.join(' ')).toMatch(
       /pytest configuration in pyproject\.toml could not be read/,
     );
+  });
+
+  it.skipIf(NO_PYTEST)('never echoes the config line that failed to parse', async () => {
+    const token = 'ghp_FAKEtoken0123456789abcdefFAKE';
+    const root = tmp({ 'pytest.ini': `[pytest]\naddopts = -q\n${token}\n` });
+    const a = await scopeWith(root, 'python3');
+    expect(a.scope).toBe('narrowed');
+    const text = JSON.stringify(a);
+    expect(text).not.toContain(token);
+    expect(text).not.toContain(root);
+    expect(text).toContain('pytest.ini');
   });
 });
 

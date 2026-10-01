@@ -263,7 +263,8 @@ export async function readPytestContext(
     return unreadableConfig('the repository could not be copied to read it');
   }
   try {
-    // Best effort: an unpinned command falls back to python3.
+    // Best effort: an unpinned guess is contained because the sidecar refuses
+    // any answer another pytest generation would read differently.
     const interpreter = testCommandInterpreter(command, shadow.path);
     if (interpreter.kind === 'refused') {
       return unreadableConfig('the test command names an interpreter outside the repository');
