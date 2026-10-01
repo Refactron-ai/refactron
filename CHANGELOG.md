@@ -20,35 +20,55 @@ end: a multi-line TOML `addopts` string, a comment after the
 `[tool.pytest.ini_options]` header, `.pytest.ini`, an ini continuation after a
 `--x=y` line, a blank or comment line inside an ini value, a continuation line
 starting with `[`, CR-only / form-feed / `\x85` line separators, a quoted
-`"tool"` table, and a config named by `-c` in the test command. In the other
-direction, a black-style TOML array with `]` at column 0 floored a config that
-narrowed nothing.
+`"tool"` table, a config named by `-c` in the test command, the `py.test`
+spelling of the command, a diff that adds the filter to the config, and
+`-c $VAR`.
 
 Configuration is now resolved and parsed by pytest's own code, in a helper that
-runs under the same interpreter as your tests: pytest's precedence, `-c` /
-`--config-file`, `-o` / `--override-ini` and `PYTEST_ADDOPTS`, and pytest 9's
-`pytest.toml`, `.pytest.toml` and `[tool.pytest]`. The rules that judge the values
-are unchanged. **If the configuration cannot be read** (no interpreter, pytest not
-importable from it, a syntax error, a timeout), the scope is now `narrowed` with a
-"could not be read" signal, so the verdict caps at `UNPROVEN` rather than trusting
-a config nobody read.
+reads the same copy of the repository the tests run in, with the change applied,
+and honours pytest's precedence, `-c` / `--config-file`, `-o` /
+`--override-ini`, `PYTEST_ADDOPTS`, and pytest 9's `pytest.toml`, `.pytest.toml`
+and `[tool.pytest]`. It runs under the interpreter the test command names where
+that can be told, and because it cannot always be told, it also works the answer
+out for each pytest generation and refuses when they would disagree.
 
-**What can change for you.** Verdicts only move toward `UNPROVEN`. Checked against
-pytest's own resolution on the pytest config of 53 popular projects (58 file
-combinations) and on click and more-itertools at 20 sampled commits each, the
-values read were identical to pytest's everywhere pytest 9.1 could read them, and
-no scope changed on click or more-itertools. Scope did change where the old reader
-had not been reading the config at all:
+**If the configuration cannot be read** (no interpreter, pytest not importable
+from it, a syntax error, a timeout, settings that depend on the pytest version, a
+pytest 9 format under an older pytest, shell syntax or an `@file` in the pytest
+arguments), the scope is now `narrowed` with a "could not be read" signal, so the
+verdict caps at `UNPROVEN` rather than trusting a config nobody read. The signal
+gives a fixed reason and the file name; it never quotes the file's contents.
+
+**What can change for you.** The rules that judge the values are unchanged with
+one exception: `testpaths = []` is now `full`, as pytest ignores it, where it
+used to floor as unreadable. Most changes move verdicts toward `UNPROVEN`, but
+three correctly move to `full`, each because pytest really runs the whole suite:
+
+- a black-style TOML array with `]` at column 0, which the old reader could not
+  parse;
+- `testpaths = []`;
+- a narrowing config in a file pytest does not select, such as a `setup.cfg`
+  `[tool:pytest]` section when a `pytest.ini` exists (the old reader judged
+  every file it found).
+
+Checked against pytest's own resolution on the pytest config of 53 popular
+projects (58 file combinations) and on click and more-itertools at 20 sampled
+commits each, the values read were identical to pytest's everywhere pytest 9.1
+could read them, and no scope changed on click or more-itertools. Scope did change
+where the old reader had not been reading the config at all:
 
 - Projects using pytest 9's native `[tool.pytest]` table (seen in airflow, attrs,
   fastapi, pydantic, pytest and pytest-django) or dotted `ini_options.*` keys
   (tox) are now judged on what that config says, where they were previously
-  judged as unconfigured.
-- If your interpreter has a pytest older than 9 while the project uses a pytest 9
-  format, which that pytest ignores, the check now fails closed.
-- `poetry run pytest` and `uv run pytest` do not reveal their interpreter; if
-  `python3` lacks pytest, the config reads as unreadable. Name the environment's
-  interpreter instead: `.venv/bin/python -m pytest -q`.
+  judged as unconfigured. If the interpreter has a pytest older than 9, which
+  ignores those tables, the read is refused instead.
+- A config read for the first time can floor on an `addopts` flag Refactron does
+  not recognise (pydantic's `--benchmark-*`, tox's `--no-success-flaky-report`),
+  while the same flag on the command line does not.
+- `poetry run pytest` and `uv run pytest` do not reveal their interpreter, so
+  Refactron uses `python3`; if `python3` lacks pytest, the config reads as
+  unreadable. Run Refactron from the activated environment so that `python3` is
+  the project's interpreter.
 
 ## [0.4.7] - 2026-10-11
 
@@ -292,10 +312,6 @@ a large share of projects. Refactron now compares the setting against the test
 files your repository actually has. Where it cannot answer — the discovery
 pattern is customised through `python_files`, or the scan came back empty — it
 floors and says which of those it was.
-
-Only the repository root is read. pytest walks up to find its rootdir, but your
-suite runs inside an isolated copy whose parent is a temporary directory, so a
-config above your repository never reaches the run being judged.
 
 ### Changed
 
