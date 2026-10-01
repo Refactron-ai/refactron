@@ -872,6 +872,13 @@ describe('narrowing declared in a pytest config file (#137)', () => {
     expect(a.scope).toBe('full');
   });
 
+  it.each(['py.test -q', 'python3 -m pytest -q', 'poetry run py.test'])(
+    'applies the config to %s',
+    (cmd) => {
+      expect(scopeOf(cfg('pytest.ini', { addopts: ['-k', 'test_a'] }), cmd).scope).toBe('narrowed');
+    },
+  );
+
   it('still reports narrowed for a command filter when the config is clean', () => {
     const a = scopeOf(cfg('pytest.ini', { addopts: ['-q'] }), 'pytest -k test_a');
     expect(a.scope).toBe('narrowed');

@@ -369,6 +369,17 @@ describe('the config judged is the config the suite runs with (#174 review)', ()
     240_000,
   );
 
+  it.skipIf(NO_PYTHON)(
+    'judges config for the py.test spelling too',
+    async () => {
+      const root = await fixture('pytest.ini', '[pytest]\naddopts = -k test_a\n');
+      const report = await verify(root, 'PYTHONPATH=. py.test -q');
+      expect(report.verdict).not.toBe('SAFE');
+      expect(report.testScope.scope).toBe('narrowed');
+    },
+    240_000,
+  );
+
   it.skipIf(NO_PYTHON || hasPytest9())(
     'fails closed end to end when the config cannot be read (a pytest 9 file, pytest 8)',
     async () => {

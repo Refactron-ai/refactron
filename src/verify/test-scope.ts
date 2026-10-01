@@ -767,9 +767,9 @@ export function assessTestScope(
     const runner = runnerNameOf(command);
     const ambient = ambientSignals(env, runner);
     if (ambient.length > 0) return { scope: 'narrowed', source, signals: ambient };
-    // Gated on the runner exactly as the ambient variables are, so a stray
-    // pytest.ini in a JS project does not floor its verdict (#137).
-    if (runner === 'pytest') {
+    // Gated on the runner, so a stray pytest.ini in a JS project does not floor
+    // its verdict (#137). On the parsed table, not the name: `py.test` is pytest.
+    if (parseRunner(tokenize(command))?.table === PYTEST) {
       const fromConfig = pytestConfigSignals(pytestConfig);
       if (fromConfig.length > 0) return { scope: 'narrowed', source, signals: fromConfig };
     }
