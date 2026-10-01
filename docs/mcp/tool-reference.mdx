@@ -26,9 +26,11 @@ The Refactron MCP server exposes exactly one tool. Every example below was captu
   failed was never selected. The result is reported on `testScope`. A `PYTHONPATH=` prefix is not
   narrowing, and an exported `PYTEST_ADDOPTS` carrying a filter is caught too, as
   is `addopts` or `testpaths` in your pytest configuration, which is read with
-  pytest's own code under the same interpreter as your tests. A configuration
-  that cannot be read (no interpreter, pytest not importable, a syntax error) is
-  reported `narrowed` with a "could not be read" signal on `testScope`.
+  pytest's own code from the copy of the repository the tests run in. A
+  configuration that cannot be read with certainty (no interpreter, pytest not
+  importable, a syntax error, settings that depend on the pytest version, shell
+  syntax or an `@file` in the pytest arguments) is reported `narrowed` with a
+  "could not be read" signal on `testScope`.
   Detection covers the runners and flags Refactron knows; a command using an
   unrecognised plugin flag is reported `unknown`, which does not cap the verdict.
   Run the bare command if you need certainty.

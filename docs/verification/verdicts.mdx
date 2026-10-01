@@ -437,44 +437,50 @@ against the runner that variable actually feeds, so a `PYTEST_ADDOPTS` left in
 your shell will not floor a vitest project.
 
 Narrowing configured in your **pytest** configuration is also seen, and it is
-read by pytest itself. A small helper runs under the same Python as your tests
-(the interpreter your command names, such as `python3.12 -m pytest` or
-`.venv/bin/python -m pytest`, or the one a `pytest` script's shebang names;
-otherwise `python3`) and uses pytest's own code to choose the configuration file
-and parse it. Every file pytest accepts is therefore read the way pytest reads
-it, in pytest's order of precedence: `pytest.toml`, `.pytest.toml` and a native
-`[tool.pytest]` table (pytest 9), `pytest.ini`, `.pytest.ini`, `pyproject.toml`,
-`tox.ini` and `setup.cfg`, including a file named by `-c` / `--config-file` and
-values set by `-o` / `--override-ini`, whether they appear in your command or in
-`PYTEST_ADDOPTS`. The helper never imports your `conftest.py`, a plugin, or any
-module from your repository.
+read by pytest itself. A small helper uses pytest's own code to choose the
+configuration file and parse it, from the same copy of your repository the tests
+run in, with the change applied. Every file pytest accepts is therefore read the
+way pytest reads it, in pytest's order of precedence: `pytest.toml`,
+`.pytest.toml` and a native `[tool.pytest]` table (pytest 9), `pytest.ini`,
+`.pytest.ini`, `pyproject.toml`, `tox.ini` and `setup.cfg`, including a file
+named by `-c` / `--config-file` and values set by `-o` / `--override-ini`,
+whether they appear in your command or in `PYTEST_ADDOPTS`. The helper never
+imports your `conftest.py`, a plugin, or any module from your repository.
+
+The helper runs under the interpreter your command names (`python3.12 -m pytest`,
+a `PATH=` you set in the command, or the one a `pytest` script's shebang names).
+When the command does not say (`poetry run pytest`, `uv run pytest`, a pyenv or
+asdf shim), it uses `python3`. Either way the answer is also worked out for each
+pytest generation (6, 7–8 and 9, which order their files differently), and if a
+pytest that might be the one running your tests would read different settings,
+the configuration counts as unreadable.
 
 `addopts` is scanned with the same rules as the command line, so
 `addopts = -q --strict-markers` stays `full` while `addopts = -k foo` does not.
+One difference: a flag Refactron does not recognise is `unknown` on the command
+line, which does not floor, but floors when it comes from `addopts` (for example
+pydantic's `--benchmark-*` options or tox's `--no-success-flaky-report`).
 `testpaths` counts as narrowing only when it leaves a test out: Refactron lists
 the files pytest would discover with its default patterns (`test_*.py`,
 `*_test.py`) and checks each against `testpaths`, so `testpaths = ["tests"]` in a
-project whose tests all live under `tests/` stays `full`. When that list cannot
-be trusted, `testpaths` counts as narrowing: the scan was capped, no test files
-were found, or `python_files` is customised so the default patterns do not
-apply.
+project whose tests all live under `tests/` stays `full`, and so does an empty
+`testpaths = []`, which pytest ignores. When the file list cannot be trusted,
+`testpaths` counts as narrowing: the scan was capped, no test files were found,
+or `python_files` is customised so the default patterns do not apply.
 
 **A configuration that cannot be read counts as narrowing.** If the helper cannot
-give an answer (no Python interpreter, pytest not importable from it, a syntax
-error in the file, a timeout), the scope is `narrowed` and the signal says the
-pytest configuration "could not be read", naming the file when it is known.
-Reporting `unknown` instead would not cap the verdict, and the configuration
-nobody read could be the one that deselects the failing test. A project that uses
-pytest 9's `pytest.toml` or `[tool.pytest]` while its interpreter has an older
-pytest, which ignores those, is treated the same way. If this happens for a
-command such as `poetry run pytest` or `uv run pytest`, whose interpreter cannot
-be located from the command, name the environment's interpreter instead:
-`.venv/bin/python -m pytest -q`.
-
-Only configuration inside the repository is read. pytest walks up to find its
-rootdir, but your suite runs inside an isolated copy whose parent is a temporary
-directory, so a config file above your repository does not reach the run being
-judged.
+give an answer, the scope is `narrowed` and the signal says the pytest
+configuration "could not be read", naming the file when it is known and giving the
+reason. The reasons include: no Python interpreter, pytest not importable from it,
+a syntax error in the file, a timeout, settings that depend on the pytest version,
+a pytest 9 format (`pytest.toml`, `[tool.pytest]`) under an older pytest, which
+ignores it, and a command whose pytest arguments use shell syntax (`$VAR`, a
+leading `~`, a glob, a backslash) or an `@file`, because the text Refactron holds
+is not what pytest receives. Reporting `unknown` instead would not cap the
+verdict, and the configuration nobody read could be the one that deselects the
+failing test. If this happens because `python3` is not your project's
+interpreter, run Refactron from the activated environment so that `python3` is
+its interpreter.
 
 A vitest `include` or a jest `testMatch` is still **not** seen. Those are
 JavaScript and would have to be executed rather than parsed. In practice they
@@ -482,8 +488,11 @@ cannot reach a false `SAFE` today, because coverage is Python-only and a
 JavaScript or TypeScript change already caps at `UNPROVEN`.
 
 `full` therefore means "no filter was found in the command, the environment, or
-your pytest config". It is still not a proof that the whole suite ran: a runner
-plugin or a `conftest.py` can deselect tests in ways nothing here inspects.
+the `addopts` and `testpaths` of your pytest config". It is still not a proof
+that the whole suite ran. Other settings that change collection are not judged:
+`python_files` without `testpaths`, `python_functions`, `python_classes` and
+`norecursedirs`. A runner plugin or a `conftest.py` can also deselect tests in
+ways nothing here inspects.
 
 The `PYTHONPATH=` prefix recommended below is **not** narrowing.
 `PYTHONPATH=. python3 -m pytest -q` classifies as `full`.
