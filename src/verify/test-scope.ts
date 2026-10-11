@@ -759,12 +759,10 @@ export function assessTestScope(
   }
 
   const { scope, signals } = classifyTestCommand(command);
-  // The ambient environment reaches the runner whatever the command said, so a
-  // `full` command can still be narrowed by an exported PYTEST_ADDOPTS. Only
-  // consulted when the runner is known: `unknown` already declines to claim
-  // anything, and adding an ambient signal to it would not change the verdict.
-  if (scope === 'full') {
-    const runner = runnerNameOf(command);
+  // Also for `unknown`, which does not floor: one unrecognised flag otherwise
+  // hid a narrowing config or PYTEST_ADDOPTS and the run earned SAFE.
+  const runner = SHELL_COMPOSITE_RE.test(command) ? null : runnerNameOf(command);
+  if (scope !== 'narrowed' && runner !== null) {
     const ambient = ambientSignals(env, runner);
     if (ambient.length > 0) return { scope: 'narrowed', source, signals: ambient };
     // Gated on the runner, so a stray pytest.ini in a JS project does not floor

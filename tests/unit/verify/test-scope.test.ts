@@ -977,3 +977,83 @@ describe('pytestInvocationOf (#174)', () => {
     },
   );
 });
+
+// An unrecognised flag makes the command `unknown`, which does not floor; the
+// config and ambient checks must still run, or one stock flag such as
+// `--durations-min` hides a narrowing config and the run earns SAFE.
+describe('an unrecognised flag does not skip the config and ambient checks', () => {
+  const UNKNOWN_FLAG = 'python3 -m pytest -q --durations-min=0';
+  const narrowingCfg: PytestConfigContext = {
+    config: { file: 'pytest.ini', addopts: ['-k', 'test_a'], testpaths: null, pythonFiles: null },
+    testFiles: null,
+  };
+  const cleanCfg: PytestConfigContext = {
+    config: { file: 'pytest.ini', addopts: ['-q'], testpaths: null, pythonFiles: null },
+    testFiles: null,
+  };
+  const unreadableCfg: PytestConfigContext = {
+    config: null,
+    unreadable: { file: null, reason: 'the config reader timed out' },
+    testFiles: null,
+  };
+
+  it('narrows on a narrowing config and names the file', () => {
+    const a = assessTestScope(UNKNOWN_FLAG, {}, undefined, narrowingCfg);
+    expect(a.scope).toBe('narrowed');
+    expect(a.signals.join(' ')).toContain('pytest.ini');
+  });
+
+  it('narrows on an unreadable config', () => {
+    const a = assessTestScope(UNKNOWN_FLAG, {}, undefined, unreadableCfg);
+    expect(a.scope).toBe('narrowed');
+    expect(a.signals.join(' ')).toMatch(/could not be read/);
+  });
+
+  it('narrows on an ambient filter', () => {
+    const a = assessTestScope(UNKNOWN_FLAG, { PYTEST_ADDOPTS: '-k test_a' });
+    expect(a.scope).toBe('narrowed');
+    expect(a.signals.join(' ')).toContain('PYTEST_ADDOPTS');
+  });
+
+  it('narrows the detected command too', () => {
+    expect(assessTestScope(undefined, {}, UNKNOWN_FLAG, narrowingCfg).scope).toBe('narrowed');
+  });
+
+  it('stays unknown with a clean config and no ambient filter', () => {
+    const a = assessTestScope(UNKNOWN_FLAG, { PYTEST_ADDOPTS: '-q' }, undefined, cleanCfg);
+    expect(a.scope).toBe('unknown');
+    expect(a.signals.join(' ')).toContain('--durations-min');
+  });
+
+  it('keeps the runner gate', () => {
+    expect(
+      assessTestScope('npx vitest run --foo', { PYTEST_ADDOPTS: '-k x' }, undefined, narrowingCfg)
+        .scope,
+    ).toBe('unknown');
+    expect(assessTestScope('npx vitest run --foo', { VITEST_ADDOPTS: '-t x' }).scope).toBe(
+      'narrowed',
+    );
+    expect(
+      assessTestScope('make test', { PYTEST_ADDOPTS: '-k x' }, undefined, narrowingCfg).scope,
+    ).toBe('unknown');
+    expect(
+      assessTestScope(
+        'python3 tests/runtests.py',
+        { PYTEST_ADDOPTS: '-k x' },
+        undefined,
+        narrowingCfg,
+      ).scope,
+    ).toBe('unknown');
+  });
+
+  it('leaves a shell composite unknown', () => {
+    expect(
+      assessTestScope(
+        'python3 -m pytest -q > out',
+        { PYTEST_ADDOPTS: '-k x' },
+        undefined,
+        narrowingCfg,
+      ).scope,
+    ).toBe('unknown');
+  });
+});

@@ -469,3 +469,69 @@ describe('config that pytest reads as whole-suite reads full (#174 review)', () 
     );
   }
 });
+
+// Review of #174. An unrecognised flag makes the command `unknown`, which does not
+// floor, so the config and ambient checks have to run for it too.
+describe('an unrecognised flag does not hide what narrows the run (#174 review)', () => {
+  const UNKNOWN_FLAG = 'python3 -m pytest -q --durations-min=0';
+  const HARMLESS = DIFF.replace('+    return a - b', '+    return b + a');
+  const verify = (repoRoot: string, testCmd: string, diff = DIFF) =>
+    verifyDiff({ repoRoot, trusted: true, unifiedDiff: diff, testCmd });
+
+  it.skipIf(NO_PYTHON)(
+    'a narrowing config',
+    async () => {
+      const root = await fixture('pytest.ini', '[pytest]\naddopts = -k test_a\n');
+      const report = await verify(root, UNKNOWN_FLAG);
+      expect(report.verdict).toBe('UNPROVEN');
+      expect(report.testScope.scope).toBe('narrowed');
+      expect(report.testScope.signals.join(' ')).toContain('pytest.ini');
+    },
+    240_000,
+  );
+
+  it.skipIf(NO_PYTHON)(
+    'a config that cannot be read',
+    async () => {
+      const root = await fixture('ci.ini', '[pytest]\naddopts = -k test_a\n');
+      process.env.REFACTRON_TEST_CFG = 'ci.ini';
+      try {
+        const report = await verify(root, `${UNKNOWN_FLAG} -c $REFACTRON_TEST_CFG`);
+        expect(report.verdict).toBe('UNPROVEN');
+        expect(report.testScope.scope).toBe('narrowed');
+        expect(report.testScope.signals.join(' ')).toMatch(/could not be read/);
+      } finally {
+        delete process.env.REFACTRON_TEST_CFG;
+      }
+    },
+    240_000,
+  );
+
+  it.skipIf(NO_PYTHON)(
+    'a filter in PYTEST_ADDOPTS',
+    async () => {
+      const root = await fixture(null, '');
+      process.env.PYTEST_ADDOPTS = '-k test_a';
+      try {
+        const report = await verify(root, UNKNOWN_FLAG);
+        expect(report.verdict).toBe('UNPROVEN');
+        expect(report.testScope.scope).toBe('narrowed');
+        expect(report.testScope.signals.join(' ')).toContain('PYTEST_ADDOPTS');
+      } finally {
+        delete process.env.PYTEST_ADDOPTS;
+      }
+    },
+    240_000,
+  );
+
+  it.skipIf(NO_PYTHON)(
+    'stays unknown, and keeps its SAFE, with a config that narrows nothing',
+    async () => {
+      const root = await fixture('pytest.ini', '[pytest]\naddopts = -q\n');
+      const report = await verify(root, UNKNOWN_FLAG, HARMLESS);
+      expect(report.testScope.scope).toBe('unknown');
+      expect(report.verdict).toBe('SAFE');
+    },
+    240_000,
+  );
+});
