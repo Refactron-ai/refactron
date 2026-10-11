@@ -197,7 +197,7 @@ describe('config pytest reads as narrowing cannot earn SAFE, whatever its shape 
           unifiedDiff: DIFF,
           testCmd: 'python3 -m pytest -q',
         });
-        expect(report.verdict).not.toBe('SAFE');
+        expect(report.verdict).toBe('UNPROVEN');
         expect(report.testScope.scope).toBe('narrowed');
         expect(report.testScope.signals.join(' ')).toContain(file);
       },
@@ -215,7 +215,7 @@ describe('config pytest reads as narrowing cannot earn SAFE, whatever its shape 
         unifiedDiff: DIFF,
         testCmd: 'python3 -m pytest -q -c ci.ini',
       });
-      expect(report.verdict).not.toBe('SAFE');
+      expect(report.verdict).toBe('UNPROVEN');
       expect(report.testScope.scope).toBe('narrowed');
       expect(report.testScope.signals.join(' ')).toContain('ci.ini');
     },
@@ -562,6 +562,46 @@ describe('a pytest config outside the repository root is refused', () => {
           else process.env[k] = v;
         }
       }
+    },
+    240_000,
+  );
+});
+
+// pytest 9's own formats, judged as pytest 9 reads them. Each needs pytest 9 to
+// run at all: an older pytest ignores them, and the read is refused instead.
+describe('pytest 9 config formats, end to end (#174)', () => {
+  const PYTEST9 = !NO_PYTHON && hasPytest9();
+  const HARMLESS = DIFF.replace('+    return a - b', '+    return b + a');
+  const verify = (repoRoot: string, diff: string) =>
+    verifyDiff({ repoRoot, trusted: true, unifiedDiff: diff, testCmd: 'python3 -m pytest -q' });
+
+  const NARROWING: ReadonlyArray<readonly [string, string]> = [
+    ['pyproject.toml', '[tool.pytest]\naddopts = ["-k", "test_a"]\n'],
+    ['pytest.toml', '[pytest]\naddopts = ["-k", "test_a"]\n'],
+    ['.pytest.toml', '[pytest]\naddopts = ["-k", "test_a"]\n'],
+  ];
+  for (const [file, body] of NARROWING) {
+    it.skipIf(!PYTEST9)(
+      `refuses SAFE when ${file} narrows the run`,
+      async () => {
+        const report = await verify(await fixture(file, body), DIFF);
+        expect(report.verdict).toBe('UNPROVEN');
+        expect(report.testScope.scope).toBe('narrowed');
+        expect(report.testScope.signals.join(' ')).toContain(file);
+      },
+      240_000,
+    );
+  }
+
+  it.skipIf(!PYTEST9)(
+    'keeps SAFE with a [tool.pytest] table that narrows nothing',
+    async () => {
+      const report = await verify(
+        await fixture('pyproject.toml', '[tool.pytest]\naddopts = ["-ra"]\n'),
+        HARMLESS,
+      );
+      expect(report.testScope.scope).toBe('full');
+      expect(report.verdict).toBe('SAFE');
     },
     240_000,
   );
