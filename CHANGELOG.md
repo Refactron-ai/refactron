@@ -7,6 +7,43 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.4.7] - 2026-10-11
+
+### Changed - a diff that weakens its own tests no longer earns `SAFE`
+
+`verify-diff` and the MCP `verify_change` tool run the post-diff suite. A change
+that also relaxed the tests that would catch it - removing an assertion,
+deleting or renaming a test, adding a skip - made the weakened suite pass, and on
+the trusted path (`--trusted`) that read `SAFE`. Now, when the diff weakens a test
+file, a would-be `SAFE` is reported `UNPROVEN` with a reason naming the file
+(#163).
+
+- Detected: a net drop in assertions (pytest `assert`, including a compound
+  `foo(); assert x`, and unittest `self.assertX` / `self.fail`), a test function
+  whose name disappears (`def` or `async def`), and added skip/xfail markers
+  (`@pytest.mark.skip`/`skipif`/`xfail`, `pytest.skip()`, `unittest.skip`,
+  `self.skipTest`). Assertion text inside strings and docstrings does not count.
+- If a changed test file's pre-diff content cannot be read, or its path leaves the
+  repository, it is treated as weakened, so the verdict fails closed.
+- New additive report field `testWeakening` (`[{ file, reasons }]`), present only
+  when weakening was found. `reportVersion` stays 1; `engineVersion` marks the
+  change.
+- Untrusted diffs are unaffected: their `SAFE` was already withheld (0.4.6).
+
+Known limits: weakening that keeps the assertion count the same (a loosened
+comparison, compensating assertions, an early `return`) is not detected (#164),
+and any weakened test file counts, not only the one covering the change (#165).
+Both can only leave a previous verdict standing; neither can produce `SAFE`.
+
+### Security - dependencies
+
+Transitive production dependencies are updated to clear new advisories:
+`proxy-addr` (critical), `hono` (high and moderate) and `ip-address`
+(moderate), reached through `@modelcontextprotocol/sdk`, which moves from 1.30.0
+to 1.32.1. No declared dependency ranges changed.
+
+---
+
 ## [0.4.6] - 2026-09-07
 
 ### Security - a coverage-based `SAFE` on an untrusted diff was forgeable (BREAKING DEFAULT)

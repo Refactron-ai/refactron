@@ -7,6 +7,21 @@ description: Release history for Refactron, newest first.
 Refactron follows [Semantic Versioning](https://semver.org/). The full,
 unabridged log lives in [`CHANGELOG.md`](https://github.com/Refactron-ai/refactron/blob/main/CHANGELOG.md).
 
+<Update label="0.4.7" description="October 11, 2026">
+  **A diff that weakens its own tests no longer earns `SAFE`.** On the trusted
+  path, a change that also removes an assertion, deletes or renames a test, or
+  adds a skip to the tests that would catch it is now reported `UNPROVEN`, with
+  a reason naming the file and a new `testWeakening` field in the report (#163).
+  Assertion text inside strings and docstrings does not count, and an unreadable
+  pre-diff test file fails closed. Weakening that keeps the assertion count the
+  same is not detected yet (#164).
+
+  **Dependencies.** Transitive production dependencies are updated to clear new
+  advisories in `proxy-addr` (critical), `hono` and `ip-address`, through
+  `@modelcontextprotocol/sdk` 1.32.1.
+
+</Update>
+
 <Update label="0.4.6" description="September 7, 2026">
   **Security: a coverage-based `SAFE` on an untrusted diff was forgeable, and the
   default changed.** Coverage and the gates are measured by running the diff's own
