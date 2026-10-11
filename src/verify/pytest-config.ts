@@ -84,6 +84,7 @@ const REASON_TEXT: Readonly<Record<string, string>> = {
   'bad-option': "the command's config options could not be resolved",
   'argument-file': 'the command reads arguments from an @file',
   'bad-value': 'a value is not in the form pytest requires',
+  'outside-root': 'pytest would read a config file outside the repository',
   'internal-error': 'the config reader failed',
 };
 

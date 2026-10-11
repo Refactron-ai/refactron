@@ -264,11 +264,28 @@ describe('pytest_config.py reads what pytest reads (#174)', () => {
     expect(r.config_file).toBe('setup.cfg');
   });
 
-  it.skipIf(NO_PYTEST)('reads only files inside the root it is given', () => {
+  it.skipIf(NO_PYTEST)('refuses a config pytest would find outside the root', () => {
     const outer = repo({ 'pytest.ini': '[pytest]\naddopts = -k fast\n' });
     fs.mkdirSync(path.join(outer, 'repo'));
     const r = run(path.join(outer, 'repo'));
-    expect(r).toMatchObject({ ok: true, config_file: null, addopts: null });
+    expect(r).toMatchObject({ ok: false, config_file: null, error: 'outside-root' });
+    expect(JSON.stringify(r)).not.toContain(outer);
+  });
+
+  it.skipIf(NO_PYTEST)('refuses it past an in-root file that is not a pytest config', () => {
+    const outer = repo({ 'pytest.ini': '[pytest]\naddopts = -k fast\n' });
+    fs.mkdirSync(path.join(outer, 'repo'));
+    fs.writeFileSync(path.join(outer, 'repo', 'tox.ini'), '[tox]\nenvlist = py\n');
+    const r = run(path.join(outer, 'repo'));
+    expect(r).toMatchObject({ ok: false, config_file: null, error: 'outside-root' });
+  });
+
+  it.skipIf(NO_PYTEST)('does not look outside the root once a config is found inside', () => {
+    const outer = repo({ 'pytest.ini': '[pytest]\naddopts = -k fast\n' });
+    fs.mkdirSync(path.join(outer, 'repo'));
+    fs.writeFileSync(path.join(outer, 'repo', 'pytest.ini'), '[pytest]\naddopts = -q\n');
+    const r = run(path.join(outer, 'repo'));
+    expect(r).toMatchObject({ ok: true, config_file: 'pytest.ini', addopts: ['-q'] });
   });
 });
 
@@ -464,6 +481,13 @@ describe('the fallback reader, when pytest cannot be asked (#174)', () => {
       launcher: onlyIniconfig(),
     });
     expect(r).toMatchObject({ ok: true, config_file: 'pytest.ini', addopts: ['-k', 'fast'] });
+  });
+
+  it.skipIf(NO_PYTEST)('refuses a config found outside the root', () => {
+    const outer = repo({ 'pytest.ini': '[pytest]\naddopts = -k fast\n' });
+    fs.mkdirSync(path.join(outer, 'repo'));
+    const r = run(path.join(outer, 'repo'), ['-q'], { launcher: onlyIniconfig() });
+    expect(r).toMatchObject({ ok: false, config_file: null, error: 'outside-root' });
   });
 
   it.skipIf(NO_PYTEST)('refuses when the answer depends on the pytest version', () => {

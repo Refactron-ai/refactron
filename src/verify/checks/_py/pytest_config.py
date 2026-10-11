@@ -72,6 +72,7 @@ REASONS = frozenset(
         "bad-option",
         "argument-file",
         "bad-value",
+        "outside-root",
         "internal-error",
     )
 )
@@ -218,10 +219,12 @@ def resolve_with_pytest(root, argv):
             raise Refusal("bad-option")
 
     # Only files inside the root are read; an explicit -c is honoured as given.
+    # Any other candidate outside the root is one pytest would read: refuse.
     def bounded_loader(path):
         path = Path(path)
         if not (explicit is not None and path == explicit) and not inside(path, root):
-            return None
+            READING["path"] = None
+            raise Refusal("outside-root")
         READING["path"] = path
         try:
             return loader(path)
@@ -362,11 +365,12 @@ def generation_resolve(root, request, generation, iniconfig, toml):
         start = Path(os.path.commonpath([str(p) for p in existing])) if existing else Path.cwd()
         found = False
         for base in (start, *start.parents):
-            if not inside(base, root):
-                break
             for name in names:
                 p = base / name
                 if p.is_file():
+                    if not inside(base, root):
+                        READING["path"] = None
+                        raise Refusal("outside-root")
                     loaded = generation_load(p, pytest9, iniconfig, toml)
                     if loaded is not None:
                         inipath, inicfg, found = p, loaded, True

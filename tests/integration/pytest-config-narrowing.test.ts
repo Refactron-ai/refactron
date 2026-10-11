@@ -535,3 +535,34 @@ describe('an unrecognised flag does not hide what narrows the run (#174 review)'
     240_000,
   );
 });
+
+describe('a pytest config outside the repository root is refused', () => {
+  it.skipIf(NO_PYTHON)(
+    'refuses a pytest config found outside the repository root',
+    async () => {
+      const root = await fixture(null, '');
+      const base = await fs.mkdtemp(path.join(os.tmpdir(), 'cfg-base-'));
+      roots.push(base);
+      await fs.writeFile(path.join(base, 'pytest.ini'), '[pytest]\naddopts = -k test_a\n');
+      const saved = { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP };
+      Object.assign(process.env, { TMPDIR: base, TMP: base, TEMP: base });
+      try {
+        const report = await verifyDiff({
+          repoRoot: root,
+          trusted: true,
+          unifiedDiff: DIFF,
+          testCmd: 'python3 -m pytest -q',
+        });
+        expect(report.verdict).toBe('UNPROVEN');
+        expect(report.testScope.scope).toBe('narrowed');
+        expect(report.testScope.signals.join(' ')).toMatch(/could not be read/);
+      } finally {
+        for (const [k, v] of Object.entries(saved)) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+      }
+    },
+    240_000,
+  );
+});

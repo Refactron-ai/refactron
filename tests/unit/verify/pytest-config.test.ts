@@ -8,6 +8,7 @@ import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { invocationRefusal, parsePytestConfigOutput } from '../../../src/verify/pytest-config.js';
 import { readPytestContext } from '../../../src/verify/verify-diff.js';
 import { assessTestScope } from '../../../src/verify/test-scope.js';
@@ -85,6 +86,28 @@ describe('parsePytestConfigOutput accepts only the contract (#174)', () => {
     expect(
       parsePytestConfigOutput('{"ok": false, "config_file": "tox.ini", "error": "config-syntax"}'),
     ).toEqual({ ok: false, file: 'tox.ini', reason: 'pytest cannot parse it' });
+  });
+
+  it('has text for every reason the sidecar can give', () => {
+    const source = fs.readFileSync(
+      path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        '../../../src/verify/checks/_py/pytest_config.py',
+      ),
+      'utf8',
+    );
+    const block = /REASONS = frozenset\(\s*\(([\s\S]*?)\)\s*\)/.exec(source)?.[1] ?? '';
+    const codes = [...block.matchAll(/"([a-z0-9-]+)"/g)].map((m) => m[1]);
+    expect(codes).toContain('outside-root');
+    for (const code of codes) {
+      const read = parsePytestConfigOutput(
+        JSON.stringify({ ok: false, config_file: null, error: code }),
+      );
+      expect(read, code).toMatchObject({ ok: false });
+      expect(read.ok === false && read.reason, code).not.toBe(
+        'the config reader produced unexpected output',
+      );
+    }
   });
 
   it('never passes free text or a host path through', () => {
