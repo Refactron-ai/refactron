@@ -7,6 +7,7 @@ import type { MutationResult } from './mutation.js';
 import type { StabilityResult } from './stability.js';
 import type { WeakenedTest } from './test-weakening.js';
 import { COPY_FAILED_REASON, PRIVATE_BASE_REASON } from './private-base.js';
+import { isAncestorRefusal } from './ancestor-scan.js';
 
 export type Verdict = 'SAFE' | 'UNSAFE' | 'UNPROVEN';
 
@@ -194,7 +195,11 @@ export function fuseVerdict(
     // UNSAFE. Anchored to the start of the tests-gate reason; the suite's own
     // output only ever follows it.
     const testsReason = result.gates.tests.blockingReason ?? '';
-    if (testsReason.startsWith(PRIVATE_BASE_REASON) || testsReason.startsWith(COPY_FAILED_REASON)) {
+    if (
+      testsReason.startsWith(PRIVATE_BASE_REASON) ||
+      testsReason.startsWith(COPY_FAILED_REASON) ||
+      isAncestorRefusal(testsReason)
+    ) {
       return {
         verdict: 'UNPROVEN',
         ...base,

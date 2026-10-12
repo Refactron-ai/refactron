@@ -12,7 +12,8 @@ import { execa } from 'execa';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runRunner } from './runners/run.js';
+import { runRunner, type RunResult } from './runners/run.js';
+import { CopyIsolationError } from './private-base.js';
 import { detectRunner } from './runners/detect.js';
 import type { ChangedRange } from './diff-input.js';
 
@@ -147,7 +148,13 @@ export async function runMutation(input: MutationInput): Promise<MutationResult>
   // A mutant is only meaningful against a GREEN baseline: kill vs survive is
   // defined by whether a mutant BREAKS a passing suite. If the plain suite is
   // not green here, mutation is inconclusive and must not downgrade.
-  const baseline = await runRunner(spec, runOpts);
+  let baseline: RunResult;
+  try {
+    baseline = await runRunner(spec, runOpts);
+  } catch (err) {
+    if (err instanceof CopyIsolationError) return { ...empty, skippedReason: err.message };
+    throw err;
+  }
   if (baseline.exitCode !== 0) {
     return { ...empty, skippedReason: 'baseline suite is not green under the plain test command' };
   }

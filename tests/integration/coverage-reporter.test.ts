@@ -724,9 +724,13 @@ describe('python-line-coverage reporter', () => {
           { mode: 0o755 },
         );
         await fs.writeFile(path.join(bin, 'tool'), `#!${shim}\nprint(1)\n`, { mode: 0o755 });
+        // A copy, as in a real run: the checkout has node_modules above FIXTURE,
+        // which the check for runner files above the copy refuses.
+        const project = path.join(root, 'project');
+        await fs.cp(FIXTURE, project, { recursive: true });
 
         const result = await reportCoverage({
-          projectRoot: FIXTURE,
+          projectRoot: project,
           testCmd: `PATH=${bin} tool`,
           _probeOverride: true,
         });

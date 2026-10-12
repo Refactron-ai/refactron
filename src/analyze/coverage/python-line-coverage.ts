@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { redactEnvForRunner } from '../../verify/runners/run.js';
 import { CopyIsolationError, mkdtempPrivate } from '../../verify/private-base.js';
+import { refuseRunnerFilesAbove } from '../../verify/ancestor-scan.js';
 import * as fs from 'node:fs/promises';
 import * as fsSync from 'node:fs';
 import * as path from 'node:path';
@@ -686,6 +687,7 @@ export async function reportCoverage(input: CoverageReportInput): Promise<Covera
   // still read every credential - because coverage runs the suite a second time.
   let tmp: string;
   try {
+    await refuseRunnerFilesAbove(input.projectRoot, testCmd);
     tmp = await mkdtempPrivate('refactron-cov-');
   } catch (err) {
     if (err instanceof CopyIsolationError) return declined(err.message);

@@ -1,5 +1,6 @@
 import { execa } from 'execa';
 import type { RunnerSpec } from '../types.js';
+import { refuseRunnerFilesAbove } from '../ancestor-scan.js';
 
 export interface RunResult {
   exitCode: number;
@@ -203,11 +204,17 @@ export function redactEnvForRunner(env: NodeJS.ProcessEnv): Record<string, strin
   return out;
 }
 
+/** Runs the suite in `spec.cwd`, a verification copy. Throws a
+ *  CopyIsolationError, uncaught by the attempt loop, when the run cannot be
+ *  isolated there; callers map it to UNPROVEN or inconclusive. */
 export async function runRunner(spec: RunnerSpec, opts: RunOptions = {}): Promise<RunResult> {
   const retries = Math.max(0, opts.retries ?? 0);
+  const command = [spec.cmd, ...spec.args].join(' ');
   let last: RunResult | null = null;
   for (let attempt = 0; attempt <= retries; attempt++) {
     opts.onAttempt?.(attempt);
+    // Before every attempt: an earlier run may have written above the copy.
+    await refuseRunnerFilesAbove(spec.cwd, command);
     const t0 = Date.now();
     try {
       const r = await execa(spec.cmd, spec.args, {

@@ -92,6 +92,20 @@ describe('fuseVerdict', () => {
       expect(r.reason).toContain('private directory for the verification copy');
     });
 
+    it('a runner-relevant file above the copy → UNPROVEN, naming the kind', () => {
+      const r = fuse(
+        result(
+          false,
+          'a pytest.ini above the verification copy could change the test run, so it was not run (found in ~/x)',
+        ),
+        ['a.py'],
+        unknown,
+      );
+      expect(r.verdict).toBe('UNPROVEN');
+      expect(r.reason).toContain('above the verification copy');
+      expect(r.reason).toContain('pytest.ini');
+    });
+
     it('a copy that could not be completed → UNPROVEN', () => {
       const r = fuse(
         result(false, 'could not create the verification copy (ENOSPC)'),
@@ -105,6 +119,7 @@ describe('fuseVerdict', () => {
     it('a real failure whose output merely quotes those reasons stays UNSAFE', () => {
       // The suite's output follows the reason's start, so only the start may map.
       for (const echoed of [
+        'a conftest.py above the verification copy could change the test run',
         'could not create a private directory for the verification copy',
         'could not create the verification copy (ENOSPC)',
       ]) {
