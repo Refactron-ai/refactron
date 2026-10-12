@@ -16,6 +16,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { verifyDiff } from '../../src/verify/verify-diff.js';
+import { verificationBase } from '../../src/verify/private-base.js';
 
 function hasPythonTooling(): boolean {
   try {
@@ -541,7 +542,8 @@ describe('a pytest config outside the repository root is refused', () => {
     'refuses a pytest config found outside the repository root',
     async () => {
       const root = await fixture(null, '');
-      const base = await fs.mkdtemp(path.join(os.tmpdir(), 'cfg-base-'));
+      // Under a qualifying base: on Linux os.tmpdir() is /tmp, which never qualifies.
+      const base = await fs.mkdtemp(path.join(await verificationBase(), 'cfg-base-'));
       roots.push(base);
       await fs.writeFile(path.join(base, 'pytest.ini'), '[pytest]\naddopts = -k test_a\n');
       const saved = { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP };
