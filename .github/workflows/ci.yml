@@ -59,6 +59,28 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
+  # The `test` matrix installs the latest pytest, so rows gated on an older one
+  # never run there.
+  pytest-8:
+    name: pytest config (pytest 8)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python3 -m pip install 'pytest<9' coverage
+      - run: npm ci
+      - run: >-
+          npx vitest run
+          tests/unit/verify/pytest-config-sidecar.test.ts
+          tests/unit/verify/pytest-config.test.ts
+          tests/integration/pytest-config-narrowing.test.ts
+
   product-gate:
     name: Product Gate
     runs-on: ubuntu-latest
