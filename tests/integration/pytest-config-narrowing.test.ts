@@ -553,8 +553,9 @@ describe('a pytest config outside the repository root is refused', () => {
           unifiedDiff: DIFF,
           testCmd: 'python3 -m pytest -q',
         });
+        // The pre-run check refuses the run first; the config read refuses too.
         expect(report.verdict).toBe('UNPROVEN');
-        expect(report.testScope.scope).toBe('narrowed');
+        expect(report.reason).toMatch(/^a pytest\.ini above the verification copy/);
         expect(report.testScope.signals.join(' ')).toMatch(/could not be read/);
       } finally {
         for (const [k, v] of Object.entries(saved)) {

@@ -138,9 +138,19 @@ describe('a copy that cannot be made ends UNPROVEN', () => {
   );
 
   it.skipIf(NO_PYTHON)(
-    'the coverage copy',
+    'the copy the pytest config is read from',
     async () => {
       const r = await verifyWithFailure('refactron-shadow-', 3, SAFE_DIFF);
+      expect(r.verdict).toBe('UNPROVEN');
+      expect(r.testScope.scope).toBe('narrowed');
+    },
+    120_000,
+  );
+
+  it.skipIf(NO_PYTHON)(
+    'the coverage copy',
+    async () => {
+      const r = await verifyWithFailure('refactron-shadow-', 4, SAFE_DIFF);
       expectUnprovenWithoutCoverage(r);
       expect(r.coverage.unknownReason).toMatch(/private directory for the verification copy/);
     },
@@ -170,7 +180,7 @@ describe('a copy that cannot be made ends UNPROVEN', () => {
   it.skipIf(NO_PYTHON)(
     'a stability rerun copy counts as inconclusive',
     async () => {
-      const r = await verifyWithFailure('refactron-shadow-', 4, SAFE_DIFF, { flakyCheck: true });
+      const r = await verifyWithFailure('refactron-shadow-', 5, SAFE_DIFF, { flakyCheck: true });
       expect(r.stability?.inconclusive).toBe(1);
       expect(r.stability?.varied).toEqual([]);
     },
