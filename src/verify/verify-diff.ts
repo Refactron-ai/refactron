@@ -7,6 +7,8 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { RefactronVerifier } from './engine.js';
 import { createShadowTree } from './shadow-tree.js';
+import { CopyIsolationError } from './private-base.js';
+import type { ShadowTreeHandle } from './types.js';
 import { reportCoverage, normalizePath } from '../analyze/coverage/index.js';
 import { attributeChangedLines } from './coverage-attribution.js';
 import { buildStatementMap } from './statement-map.js';
@@ -427,7 +429,13 @@ async function assessCoverage(
       ),
     };
   }
-  const shadow = await createShadowTree(input.repoRoot, toChanges(input.repoRoot, edits));
+  let shadow: ShadowTreeHandle;
+  try {
+    shadow = await createShadowTree(input.repoRoot, toChanges(input.repoRoot, edits));
+  } catch (err) {
+    if (err instanceof CopyIsolationError) return { coverage: unknownCoverage(err.message) };
+    throw err;
+  }
   try {
     const report = await reportCoverage({
       projectRoot: shadow.path,

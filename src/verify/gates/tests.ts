@@ -1,12 +1,11 @@
-import * as fs from 'node:fs/promises';
-import * as os from 'node:os';
-import * as path from 'node:path';
 import type { GateResult } from '../../contracts.js';
 import type { CheckContext } from '../types.js';
 import { detectRunner } from '../runners/detect.js';
 import { runRunner, type RunResult } from '../runners/run.js';
 import { summarizeVitestFailures } from '../summarize-vitest.js';
 import { extractFailureIds } from '../failure-ids.js';
+import { CopyIsolationError } from '../private-base.js';
+import { createShadowTree } from '../shadow-tree.js';
 
 const BASELINE_RETRIES = 2; // total attempts = retries + 1 = 3
 const TAIL_BYTES = 4000;
@@ -56,6 +55,22 @@ export async function testsGate(
   opts: TestsGateOptions,
 ): Promise<TestsGateResult> {
   const t0 = Date.now();
+  try {
+    return await runTestsGate(ctx, projectRoot, opts, t0);
+  } catch (err) {
+    if (err instanceof CopyIsolationError) {
+      return { passed: false, durationMs: Date.now() - t0, blockingReason: err.message };
+    }
+    throw err;
+  }
+}
+
+async function runTestsGate(
+  ctx: CheckContext,
+  projectRoot: string,
+  opts: TestsGateOptions,
+  t0: number,
+): Promise<TestsGateResult> {
   const detectOpts: { override?: string; timeoutMs?: number } = {};
   if (opts.testCmd !== undefined) detectOpts.override = opts.testCmd;
   if (opts.timeoutMs !== undefined) detectOpts.timeoutMs = opts.timeoutMs;
@@ -73,21 +88,19 @@ export async function testsGate(
     // here with a distinct reason (fused to UNPROVEN, never UNSAFE). This
     // contract is unchanged by the flake-aware delta below, which only runs
     // once the baseline is proven green (empty failure set).
-    const baselineTree = await fs.mkdtemp(path.join(os.tmpdir(), 'refactron-baseline-'));
+    const h = await createShadowTree(projectRoot, []);
+    let baseline: RunResult;
     try {
-      const { createShadowTree } = await import('../shadow-tree.js');
-      const h = await createShadowTree(projectRoot, []);
-      const baseline = await runRunner({ ...runner, cwd: h.path }, { retries: BASELINE_RETRIES });
-      await h.cleanup();
-      if (baseline.exitCode !== 0) {
-        return {
-          passed: false,
-          durationMs: Date.now() - t0,
-          blockingReason: baselineFailReason(baseline.stdout, baseline.stderr),
-        };
-      }
+      baseline = await runRunner({ ...runner, cwd: h.path }, { retries: BASELINE_RETRIES });
     } finally {
-      await fs.rm(baselineTree, { recursive: true, force: true });
+      await h.cleanup();
+    }
+    if (baseline.exitCode !== 0) {
+      return {
+        passed: false,
+        durationMs: Date.now() - t0,
+        blockingReason: baselineFailReason(baseline.stdout, baseline.stderr),
+      };
     }
   }
 
@@ -126,7 +139,6 @@ export async function testsGate(
   // tree; a state-dependent heal fails again on the fresh tree and correctly
   // stays a gate failure with the failing tail. The gate already has projectRoot
   // and ctx.changes, so the fresh tree is built exactly like the engine's.
-  const { createShadowTree } = await import('../shadow-tree.js');
   const freshHandle = await createShadowTree(projectRoot, ctx.changes);
   let retry: RunResult;
   try {

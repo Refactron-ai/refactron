@@ -65,6 +65,58 @@ describe('fuseVerdict', () => {
     expect(r.verdict).toBe('UNSAFE');
     expect(r.reason).toContain('test_x broke');
   });
+
+  describe('a run that could not be isolated in its copy maps to UNPROVEN', () => {
+    it('no private directory for the copy (no gate ran) → UNPROVEN', () => {
+      const notRun = {
+        passed: false,
+        durationMs: 0,
+        blockingReason: 'not run: the verification copy could not be created',
+      };
+      const res: VerificationResult = {
+        passed: false,
+        gates: {
+          syntax: notRun,
+          imports: notRun,
+          tests: {
+            passed: false,
+            durationMs: 0,
+            blockingReason:
+              'could not create a private directory for the verification copy: none of /tmp qualifies',
+          },
+        },
+        writableChanges: [],
+      };
+      const r = fuse(res, ['a.py'], unknown);
+      expect(r.verdict).toBe('UNPROVEN');
+      expect(r.reason).toContain('private directory for the verification copy');
+    });
+
+    it('a copy that could not be completed → UNPROVEN', () => {
+      const r = fuse(
+        result(false, 'could not create the verification copy (ENOSPC)'),
+        ['a.py'],
+        unknown,
+      );
+      expect(r.verdict).toBe('UNPROVEN');
+      expect(r.testScope.scope).toBe('unknown');
+    });
+
+    it('a real failure whose output merely quotes those reasons stays UNSAFE', () => {
+      // The suite's output follows the reason's start, so only the start may map.
+      for (const echoed of [
+        'could not create a private directory for the verification copy',
+        'could not create the verification copy (ENOSPC)',
+      ]) {
+        const r = fuse(
+          result(false, `tests fail after refactoring:\nE   AssertionError\n${echoed}`),
+          ['a.py'],
+          unknown,
+        );
+        expect(r.verdict).toBe('UNSAFE');
+      }
+    });
+  });
   it('tests pass + changed lines covered → SAFE', () => {
     expect(fuse(result(true), ['a.py'], covered).verdict).toBe('SAFE');
   });

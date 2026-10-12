@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
 import { redactEnvForRunner } from '../../verify/runners/run.js';
+import { CopyIsolationError, mkdtempPrivate } from '../../verify/private-base.js';
 import * as fs from 'node:fs/promises';
 import * as fsSync from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 
 /** Canonical form for path keys in the covered-lines set: no leading `./`,
@@ -526,7 +526,7 @@ async function resolveSitePackages(
   pythonBin: string,
   env: NodeJS.ProcessEnv,
 ): Promise<string | null> {
-  const neutral = await fs.mkdtemp(path.join(os.tmpdir(), 'refactron-cov-probe-'));
+  const neutral = await mkdtempPrivate('refactron-cov-probe-');
   try {
     return await new Promise((resolve) => {
       const p = spawn(
@@ -631,10 +631,26 @@ export async function reportCoverage(input: CoverageReportInput): Promise<Covera
   //
   // `_probeOverride` is the test-only injection: false forces the not-found
   // decline; true and undefined resolve for real.
-  const site =
-    input._probeOverride === false
-      ? null
-      : await resolveSitePackages(runner, redactEnvForRunner(process.env));
+  const declined = (reason: string): CoverageReport => ({
+    coverageToolFound: true,
+    coveredLines: new Set(),
+    measuredFiles: new Set(),
+    executableLines: new Map(),
+    excludedLines: new Map(),
+    runDurationMs: performance.now() - t0,
+    measurementFailed: true,
+    measurementFailureReason: reason,
+  });
+  let site: string | null;
+  try {
+    site =
+      input._probeOverride === false
+        ? null
+        : await resolveSitePackages(runner, redactEnvForRunner(process.env));
+  } catch (err) {
+    if (err instanceof CopyIsolationError) return declined(err.message);
+    throw err;
+  }
   if (site === null) {
     return {
       coverageToolFound: false,
@@ -655,9 +671,6 @@ export async function reportCoverage(input: CoverageReportInput): Promise<Covera
     };
   }
 
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'refactron-cov-'));
-  const dataFile = path.join(tmp, '.coverage');
-  const jsonFile = path.join(tmp, 'coverage.json');
   // Order is deliberate: the command's own assignments override the inherited
   // environment, which is the point of writing them, and COVERAGE_FILE goes
   // last so a test command cannot redirect the data file we are about to read.
@@ -671,6 +684,15 @@ export async function reportCoverage(input: CoverageReportInput): Promise<Covera
   // the repository's own test suite, which the diff under verification defines.
   // Fixing only the gate left the leak wide open here - the end-to-end probe
   // still read every credential - because coverage runs the suite a second time.
+  let tmp: string;
+  try {
+    tmp = await mkdtempPrivate('refactron-cov-');
+  } catch (err) {
+    if (err instanceof CopyIsolationError) return declined(err.message);
+    throw err;
+  }
+  const dataFile = path.join(tmp, '.coverage');
+  const jsonFile = path.join(tmp, 'coverage.json');
   const env = { ...redactEnvForRunner(process.env), ...plan.env, COVERAGE_FILE: dataFile };
 
   const covered = new Set<string>();

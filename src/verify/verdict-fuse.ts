@@ -6,6 +6,7 @@ import type { TestScopeAssessment } from './test-scope.js';
 import type { MutationResult } from './mutation.js';
 import type { StabilityResult } from './stability.js';
 import type { WeakenedTest } from './test-weakening.js';
+import { COPY_FAILED_REASON, PRIVATE_BASE_REASON } from './private-base.js';
 
 export type Verdict = 'SAFE' | 'UNSAFE' | 'UNPROVEN';
 
@@ -189,6 +190,18 @@ export function fuseVerdict(
   };
 
   if (!result.passed) {
+    // The copy could not be isolated: nothing was verified, so UNPROVEN, never
+    // UNSAFE. Anchored to the start of the tests-gate reason; the suite's own
+    // output only ever follows it.
+    const testsReason = result.gates.tests.blockingReason ?? '';
+    if (testsReason.startsWith(PRIVATE_BASE_REASON) || testsReason.startsWith(COPY_FAILED_REASON)) {
+      return {
+        verdict: 'UNPROVEN',
+        ...base,
+        testScope: { ...testScope, scope: 'unknown' },
+        reason: testsReason,
+      };
+    }
     const failedGate: 'syntax' | 'imports' | 'tests' = !result.gates.syntax.passed
       ? 'syntax'
       : !result.gates.imports.passed

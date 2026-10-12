@@ -3,8 +3,12 @@ import { createShadowTree } from './shadow-tree.js';
 import { syntaxGate } from './gates/syntax.js';
 import { importsGate } from './gates/imports.js';
 import { testsGate, type TestsGateOptions } from './gates/tests.js';
+import { CopyIsolationError } from './private-base.js';
+import type { ShadowTreeHandle } from './types.js';
 
 export type GateName = 'syntax' | 'imports' | 'tests';
+
+const NOT_RUN_REASON = 'not run: the verification copy could not be created';
 
 export interface RefactronVerifierOptions {
   projectRoot: string;
@@ -39,7 +43,13 @@ export class RefactronVerifier implements Verifier {
   constructor(private readonly opts: RefactronVerifierOptions) {}
 
   async verify(plan: RefactorPlan): Promise<VerificationResult> {
-    const handle = await createShadowTree(this.opts.projectRoot, plan.changes);
+    let handle: ShadowTreeHandle;
+    try {
+      handle = await createShadowTree(this.opts.projectRoot, plan.changes);
+    } catch (err) {
+      if (err instanceof CopyIsolationError) return this.notRun(err.message);
+      throw err;
+    }
     this.opts.onShadowRoot?.(handle.path);
     try {
       const ctx = { shadowRoot: handle.path, changes: plan.changes };
@@ -72,6 +82,21 @@ export class RefactronVerifier implements Verifier {
     } finally {
       await handle.cleanup();
     }
+  }
+
+  /** No copy, so no gate ran. The tests gate carries the cause, which fusion
+   *  maps to UNPROVEN. */
+  private notRun(cause: string): VerificationResult {
+    const notRun: GateResult = { passed: false, durationMs: 0, blockingReason: NOT_RUN_REASON };
+    const gates = {
+      syntax: notRun,
+      imports: notRun,
+      tests: { passed: false, durationMs: 0, blockingReason: cause },
+    };
+    for (const gate of ['syntax', 'imports', 'tests'] as const) {
+      this.opts.onGateComplete?.(gate, gates[gate]);
+    }
+    return { passed: false, gates, writableChanges: [] };
   }
 
   private fail(gates: Partial<VerificationResult['gates']>): VerificationResult {

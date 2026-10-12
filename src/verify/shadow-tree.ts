@@ -1,9 +1,9 @@
 import * as fs from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import type { FileChange } from '../contracts.js';
 import type { ShadowTreeHandle } from './types.js';
+import { CopyFailedError, mkdtempPrivate } from './private-base.js';
 
 // Dirs we never copy/walk into the shadow tree. Build outputs, caches, and
 // VCS state are pure noise. Source dirs to mutate are NOT here.
@@ -30,7 +30,7 @@ export async function createShadowTree(
   sourceRoot: string,
   changes: FileChange[],
 ): Promise<ShadowTreeHandle> {
-  const dest = await fs.mkdtemp(path.join(os.tmpdir(), 'refactron-shadow-'));
+  const dest = await mkdtempPrivate('refactron-shadow-');
   // Everything after mkdtemp must clean up on the way out. The copy below runs
   // BEFORE the containment check, so a rejected change used to leave a full
   // copy of the caller's source in the temp dir forever: no handle is returned
@@ -38,7 +38,11 @@ export async function createShadowTree(
   try {
     const changedPaths = new Set(changes.map((c) => path.resolve(c.path)));
 
-    await copyTree(sourceRoot, dest, changedPaths);
+    // A copy that cannot be completed (ENOSPC, an unreadable file) is a
+    // verification that never ran, not a broken change.
+    await copyTree(sourceRoot, dest, changedPaths).catch((err: unknown) => {
+      throw new CopyFailedError(err);
+    });
 
     // Containment is RESOLVED, not spelled. `path.relative(...).startsWith('..')`
     // catches `../` and absolute paths - both still refused, both still tested -
@@ -58,7 +62,9 @@ export async function createShadowTree(
       if (parentReal !== destReal && !parentReal.startsWith(destReal + path.sep)) {
         throw new Error(`FileChange path escapes the shadow tree: ${change.path}`);
       }
-      await fs.writeFile(target, change.newContent, 'utf8');
+      await fs.writeFile(target, change.newContent, 'utf8').catch((err: unknown) => {
+        throw new CopyFailedError(err);
+      });
     }
   } catch (err) {
     await fs.rm(dest, { recursive: true, force: true });
