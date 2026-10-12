@@ -7,6 +7,37 @@ description: Release history for Refactron, newest first.
 Refactron follows [Semantic Versioning](https://semver.org/). The full,
 unabridged log lives in [`CHANGELOG.md`](https://github.com/Refactron-ai/refactron/blob/main/CHANGELOG.md).
 
+<Update label="0.4.8" description="October 12, 2026">
+  **Security: files another local user placed above the verification copy reached
+  your test run**
+  ([GHSA-qfjx-7h62-ggqm](https://github.com/Refactron-ai/refactron/security/advisories/GHSA-qfjx-7h62-ggqm),
+  High, affects 0.4.7 and earlier). Copies were created under the shared system
+  temp directory, and test runners read files from the directories above the one
+  they run in. Another local user could place a pytest config, `conftest.py`,
+  `node_modules` or `tsconfig.json` there; it ran as you and could change the
+  verdict. A single-user machine, or a temp directory only you can write to, was
+  not exposed.
+
+  Copies are now created in a private per-user directory: the system temp
+  directory, then `~/.cache/refactron`, then `~/.refactron/verify`, then
+  `$XDG_RUNTIME_DIR`, using the first that you own with no group- or
+  world-writable directory above it. `REFACTRON_VERIFY_BASE` picks one
+  explicitly. If none qualifies, a copy cannot be created, or a runner file sits
+  above the copy, the verification ends `UNPROVEN` with a reason naming the
+  cause. `UNPROVEN` exits `0`, so a CI job that fails only on exit `1` should also
+  check for these reasons. The 0.4.4 notes in `CHANGELOG.md` overstated this
+  isolation; that sentence is removed.
+
+  **pytest config is read by pytest (#174).** The narrowed-suite check now asks
+  pytest's own code which config applies and what it says, so dotted TOML keys,
+  `[tool . pytest . ini_options]` and pytest 9's `[tool.pytest]` are judged
+  instead of treated as absent, and an unrecognised flag such as
+  `--durations-min=0` no longer skips the check. Either gap could give `SAFE` to
+  a run the repository's own config narrowed. A config that cannot be read now
+  caps the verdict at `UNPROVEN`.
+
+</Update>
+
 <Update label="0.4.7" description="October 11, 2026">
   **A diff that weakens its own tests no longer earns `SAFE`.** On the trusted
   path, a change that also removes an assertion, deletes or renames a test, or

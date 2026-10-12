@@ -194,7 +194,7 @@ A gate rejected the change:
 
 The gates passed, but Refactron won't claim the change is safe, because the evidence isn't there. This is the verdict no other gate gives you honestly.
 
-There are two ways to land here:
+There are three ways to land here:
 
 - **The changed code isn't exercised.** Your tests pass, but none of them run the code you changed. A green suite tells you nothing about untested lines. Refactron lists each uncovered statement and, in the JSON report, a `missingTests` hint:
 
@@ -205,6 +205,16 @@ There are two ways to land here:
   ```
 
 - **Coverage couldn't be assessed.** The change isn't entirely Python, or `coverage.py` isn't installed. Refactron can't measure whether the changed statements ran, so it declines to certify `SAFE`. The reason reads "coverage of the changed code could not be determined."
+
+- **The run could not be isolated.** Refactron runs your tests in a copy under a directory private to your account (see [Where the copy is made](/concepts/safety-model#where-the-copy-is-made)). When it cannot, nothing is verified, so the verdict is `UNPROVEN`, never `UNSAFE`. The reason begins with one of:
+
+  ```
+  could not create a private directory for the verification copy: ...
+  could not create the verification copy (ENOSPC)
+  a conftest.py above the verification copy could change the test run, so it was not run (found in ~)
+  ```
+
+  The first names the directories tried; set `REFACTRON_VERIFY_BASE` to a directory only you can write to. The third names the file and where it was found; move it, or set `REFACTRON_VERIFY_BASE` elsewhere. No test you write moves any of these.
 
 `UNPROVEN` exits `0`. It is a warning, not a rejection: nothing is known to be broken, but nothing is proven either. The right response is to add the missing test, then re-run and earn `SAFE`.
 
@@ -368,7 +378,9 @@ one test that would have caught the change was never selected.
   **What this check can and cannot see.** Refactron reads the command string, the environment, and
   your pytest configuration. It recognises `pytest`, `unittest`, `vitest` and `jest` and their
   common flags — but not every flag of every plugin. A command carrying an option it does not
-  recognise is reported `unknown` rather than `full`, and `unknown` does not floor the verdict.
+  recognise is reported `unknown` rather than `full`, and `unknown` does not floor the verdict. For a
+  pytest command, your pytest configuration and `PYTEST_ADDOPTS` are still checked whatever flags
+  it carries.
   Treat this as a strong check on the shapes it knows, not a guarantee that no narrowing can ever
   reach `SAFE`. If you need certainty, run the bare command.
 </Note>

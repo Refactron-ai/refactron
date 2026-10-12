@@ -7,9 +7,52 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased]
+## [0.4.8] - 2026-10-12
+
+### Security - files another local user placed above the verification copy reached your test run
+
+[GHSA-qfjx-7h62-ggqm](https://github.com/Refactron-ai/refactron/security/advisories/GHSA-qfjx-7h62-ggqm),
+High (CWE-377, CWE-427). Affects `refactron` 0.4.7 and earlier on npm, and the
+PyPI wrapper, which runs it.
+
+Verification copies were created under the shared system temp directory (for
+example `/tmp` on Linux). Test runners also read files from the directories
+above the one they run in: pytest and Python packaging config, `conftest.py`, a
+`node_modules` that resolves a module the copy lacks, a `tsconfig.json`. Another
+local user who could write to the temp directory could place such a file above
+the copy, and the test run picked it up: their code ran as you, and it could
+change the verdict. A `SAFE` or `UNSAFE` from 0.4.7 or earlier, produced on a
+machine where another account could write to a directory above the copy, may
+have been decided by that account's files rather than your repository's. A
+single-user machine, or a temp directory only your account can write to, was
+not exposed.
+
+Copies are now created in a private per-user directory, and before every
+test-runner spawn the directories above the copy are checked for files the
+runner would read; a hit ends the verification `UNPROVEN`. pytest runs with no
+added options, so your repository's own configuration and `conftest.py` cutoff
+apply exactly as pytest resolves them. Details and upgrade notes are under
+Changed below.
+
+**Correction.** The 0.4.4 notes said a pytest config above your repository never
+reaches the run being judged, because the suite runs in a copy under a temporary
+directory. That overstated the isolation: a file above the copy could reach the
+run, which is this advisory. The sentence has been removed from the 0.4.4 notes
+and from the verdicts page.
 
 ### Fixed - pytest config is read by pytest, and an unreadable one no longer passes as `full` (#174)
+
+Two gaps in 0.4.7 could give `SAFE` to a run the repository's own pytest config
+narrowed. Both now cap the verdict at `UNPROVEN` when the config narrows the run:
+
+- A flag Refactron does not recognise, such as `--durations-min=0`, made the
+  scope `unknown`, and an `unknown` scope skipped both the configuration and the
+  `PYTEST_ADDOPTS` checks. Both are now checked whatever flags a pytest command
+  carries.
+- Several valid TOML spellings of the pytest section were not read: dotted keys
+  (`pytest.ini_options.addopts = ...` under `[tool]`), a header with spaces
+  (`[tool . pytest . ini_options]`), and pytest 9's `[tool.pytest]` table. A
+  config written that way was treated as absent.
 
 The narrowed-suite check (#137, ADR-12) read pytest configuration with a line
 reader that could not reproduce pytest's parsing, and when it misread a file it
@@ -27,9 +70,10 @@ spelling of the command, a diff that adds the filter to the config, and
 Configuration is now resolved and parsed by pytest's own code, in a helper that
 reads a copy built the same way, with the change applied, and honours pytest's
 precedence, `-c` / `--config-file`, `-o` / `--override-ini`, `PYTEST_ADDOPTS`,
-and pytest 9's `pytest.toml`, `.pytest.toml` and `[tool.pytest]`. It runs under the interpreter the test command names where
-that can be told, and because it cannot always be told, it also works the answer
-out for each pytest generation and refuses when they would disagree.
+and pytest 9's `pytest.toml`, `.pytest.toml` and `[tool.pytest]`. It runs under
+the interpreter the test command names where that can be told, and because it
+cannot always be told, it also works the answer out for each pytest generation
+and refuses when they would disagree.
 
 **If the configuration cannot be read** (no interpreter, pytest not importable
 from it, a syntax error, a timeout, settings that depend on the pytest version, a
@@ -38,11 +82,6 @@ arguments, a config file pytest would find outside the repository), the scope is
 now `narrowed` with a "could not be read" signal, so the verdict caps at
 `UNPROVEN` rather than trusting a config nobody read. The signal gives a fixed
 reason and the file name; it never quotes the file's contents.
-
-This applies whatever else the command carries. Before, a flag Refactron does not
-recognise, such as `--durations-min=0`, made the scope `unknown` and skipped both
-the configuration and the `PYTEST_ADDOPTS` checks, so a narrowed run could return
-`SAFE` (0.4.7 and earlier).
 
 **What can change for you.** The rules that judge the values are unchanged with
 one exception: `testpaths = []` is now `full`, as pytest ignores it, where it
@@ -74,6 +113,50 @@ where the old reader had not been reading the config at all:
   Refactron uses `python3`; if `python3` lacks pytest, the config reads as
   unreadable. Run Refactron from the activated environment so that `python3` is
   the project's interpreter.
+
+### Changed - where verification copies are made, and new `UNPROVEN` reasons (GHSA-qfjx-7h62-ggqm)
+
+- Verification copies are created in a private per-user directory, and only
+  when that directory and every directory above it are owned by you or root
+  and not writable by group or others. Candidates, in order: the system temp
+  directory, `$XDG_CACHE_HOME/refactron` (or `~/.cache/refactron`), your
+  account's `~/.refactron/verify` (taken from the user database, not `$HOME`;
+  created 0700), then `$XDG_RUNTIME_DIR`. `REFACTRON_VERIFY_BASE` selects a
+  directory explicitly; it is then the only candidate and must pass the same
+  check.
+- A verification ends `UNPROVEN` when no private directory can be
+  established, when a copy cannot be created (for example `ENOSPC`), or when a
+  file the test runner would read sits in a directory above the copy (pytest
+  or Python packaging config, `setup.py`, `conftest.py`, `node_modules`,
+  `tsconfig.json`). The check runs before every test-runner spawn. The reason
+  names the file and the directory it was found in, with your home directory
+  shown as `~`.
+
+Upgrade notes:
+
+- On Linux with a shared `/tmp`, copies now go to `~/.cache/refactron`, or to
+  `~/.refactron/verify` when `~/.cache` is group-writable (umask 002 distros)
+  or `$HOME` belongs to another uid (GitHub Actions `container:` jobs running
+  as root with `HOME=/github/home`). If none qualifies the verdict is
+  `UNPROVEN` with the reason above; set `REFACTRON_VERIFY_BASE` to a 0700
+  directory.
+- `UNPROVEN` exits `0`. A CI job that fails only on exit `1` passes a run that
+  could not be isolated, even for a change that breaks the suite. If you gate on
+  the exit code, also fail on these reasons, or on `verdict` from `--json`.
+- A `node_modules`, `tsconfig.json`, `pyproject.toml`, `setup.py` or similar
+  file directly in a directory above the base (for example in your home
+  directory when the base is under it) now makes every verification
+  `UNPROVEN`; the reason names the directory. Move the file or set
+  `REFACTRON_VERIFY_BASE`.
+- Library callers of `reportCoverage` should pass a verification copy as
+  `projectRoot`; a directory with runner files above it now reports the
+  measurement as failed.
+- `VerdictReport` shape is unchanged (`reportVersion` stays 1); only new
+  `UNPROVEN` reasons were added, and the syntax and imports gates report
+  `not run: the verification copy could not be created` when the first copy
+  fails.
+
+---
 
 ## [0.4.7] - 2026-10-11
 

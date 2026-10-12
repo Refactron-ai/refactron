@@ -14,6 +14,6 @@ pyproject.toml reads it statically via `[tool.setuptools.dynamic]`, so the
 distribution metadata and the runtime value cannot drift apart.
 """
 
-__version__ = "0.4.7"
+__version__ = "0.4.8"
 
 __all__ = ["__version__"]

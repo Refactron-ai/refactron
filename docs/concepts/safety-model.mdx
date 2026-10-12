@@ -10,7 +10,7 @@ Refactron's value is what happens **before** you trust a change, not how clever 
 
 ## The shadow tree
 
-Nothing in the gate path reads or writes your real working tree. Refactron builds a **shadow tree** first: a temp-directory copy of the project root where unchanged files are hardlinked (cheap, instant) and the changed files are written from the proposed new content.
+Nothing in the gate path reads or writes your real working tree. Refactron builds a **shadow tree** first: a copy of the project root, in a directory private to your account, where unchanged files are hardlinked (cheap, instant) and the changed files are written from the proposed new content.
 
 <Frame caption="The change is applied to an isolated copy. Your working tree is never touched.">
   <img
@@ -20,6 +20,17 @@ Nothing in the gate path reads or writes your real working tree. Refactron build
 </Frame>
 
 For [`verify-diff`](/verification/verify-diff) and the [MCP `verify_change` tool](/mcp/overview), this is the whole story: the shadow tree is built, the gates run, the verdict is returned, and the copy is cleaned up. **Your repo is never mutated.** Landing the change is the caller's decision.
+
+### Where the copy is made
+
+Test runners read files from the directories above the one they run in (pytest config, `conftest.py`, `node_modules`, `tsconfig.json`), so the copy is made only under a directory that you own, and whose every parent up to `/` is owned by you or root and not writable by group or others. Refactron uses the first of these that qualifies:
+
+1. the system temp directory;
+2. `$XDG_CACHE_HOME/refactron` (or `~/.cache/refactron`);
+3. `~/.refactron/verify`, in your account's home from the user database rather than `$HOME`, created `0700`;
+4. `$XDG_RUNTIME_DIR`.
+
+Set `REFACTRON_VERIFY_BASE` to choose the directory yourself; it is then the only candidate and must pass the same check. Before every test-runner spawn, the directories above the copy are checked for files the runner would read from there. If no directory qualifies, the copy cannot be created, or such a file is found, the verification ends `UNPROVEN` and the reason says which (see [Verdicts](/verification/verdicts#unproven)).
 
 ## The three gates
 

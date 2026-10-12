@@ -32,7 +32,9 @@ The Refactron MCP server exposes exactly one tool. Every example below was captu
   syntax or an `@file` in the pytest arguments) is reported `narrowed` with a
   "could not be read" signal on `testScope`.
   Detection covers the runners and flags Refactron knows; a command using an
-  unrecognised plugin flag is reported `unknown`, which does not cap the verdict.
+  unrecognised plugin flag is reported `unknown`, which does not cap the verdict;
+  for a pytest command, the pytest configuration and `PYTEST_ADDOPTS` are still
+  checked.
   Run the bare command if you need certainty.
 </Warning>
 
@@ -141,6 +143,8 @@ The tool returns the same report `verify-diff --json` prints, serialized as text
 Treating those as the same sentence is how a reader talks themselves into trusting a verdict that proved nothing. They are reported separately on purpose.
 
 A third `UNPROVEN` shape is a **trust withhold**. The gates passed and the changed code is covered, but the author is untrusted (the default), so `SAFE` is withheld because the in-process measurement is forgeable. Its `reason` contains "SAFE is withheld" and `trustMode` is `"untrusted"`. This is not a coverage gap, and no test moves it. Set the `trusted` argument to `true` only if you actually trust the author; never for an external or agent-authored change.
+
+A fourth shape means the run **could not be isolated**: no directory private to the server's user could be found for the copy, the copy could not be created, or a file the test runner would read (a pytest config, `conftest.py`, `node_modules`, `tsconfig.json`) sits in a directory above it. Its `reason` begins `could not create a private directory for the verification copy`, `could not create the verification copy`, or `a <file> above the verification copy could change the test run`. Nothing was verified and no test moves it; set `REFACTRON_VERIFY_BASE` in the server's environment to a directory only that user can write to. See [Where the copy is made](/concepts/safety-model#where-the-copy-is-made).
 
 ## Errors
 

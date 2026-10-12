@@ -48,7 +48,7 @@ npm install -g refactron
 That puts `refactron` (and `refactron-mcp`) on your `PATH`. To skip the install, run `npx refactron verify-diff ...` instead.
 
 <Note>
-  `pip install refactron==0.4.7` installs a thin `refactron` shim that shells out to the npm CLI. It
+  `pip install refactron==0.4.8` installs a thin `refactron` shim that shells out to the npm CLI. It
   is not a Node-free path: you still need Node.js ≥ 18 **and** `npm install -g refactron`. When the
   npm CLI is missing, the shim prints the exact matching install command and exits non-zero.
 </Note>
@@ -110,6 +110,13 @@ Output is the verdict, its reason, and (for `UNPROVEN` by lack of coverage) the 
 | `--flaky-check`    | bool   | false       | Deep check (Python, slower): rerun a would-be-`SAFE` suite K times under a varied `PYTHONHASHSEED`; a test whose outcome varies caps the verdict at `UNPROVEN`. Downgrade-only. See [Verdicts](/verification/verdicts#flaky-check-was-the-green-stable-or-lucky). |
 | `--trusted`        | bool   | false       | Trust the diff's **author**. Without it a would-be-`SAFE` is withheld and returns `UNPROVEN`, because coverage is measured by running the diff's own suite in-process, which an untrusted diff can forge. Set it only for a change whose author you trust, never for an external or agent-authored diff.                     |
 | `--json`           | bool   | false       | Emit the full report as JSON instead of the one-line verdict.                                                                                                                                                                                                     |
+
+### Environment variables
+
+| Variable                | Description                                                                                                                                                                                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `REFACTRON_TOKEN`       | Authenticates a non-interactive run (CI). See [Authenticate](#authenticate).                                                                                                                                                                      |
+| `REFACTRON_VERIFY_BASE` | The directory verification copies are made in. It must be owned by you with no group- or world-writable directory above it, or the verdict is `UNPROVEN`. Unset, Refactron picks one (see [Where the copy is made](/concepts/safety-model#where-the-copy-is-made)). |
 
 ### Exit codes
 

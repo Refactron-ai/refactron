@@ -22,7 +22,7 @@ CLI.
 ## Install
 
 ```bash
-pip install refactron==0.3.0
+pip install refactron==0.4.8
 npm install -g refactron
 ```
 
