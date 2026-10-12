@@ -25,19 +25,24 @@ spelling of the command, a diff that adds the filter to the config, and
 `-c $VAR`.
 
 Configuration is now resolved and parsed by pytest's own code, in a helper that
-reads the same copy of the repository the tests run in, with the change applied,
-and honours pytest's precedence, `-c` / `--config-file`, `-o` /
-`--override-ini`, `PYTEST_ADDOPTS`, and pytest 9's `pytest.toml`, `.pytest.toml`
-and `[tool.pytest]`. It runs under the interpreter the test command names where
+reads a copy built the same way, with the change applied, and honours pytest's
+precedence, `-c` / `--config-file`, `-o` / `--override-ini`, `PYTEST_ADDOPTS`,
+and pytest 9's `pytest.toml`, `.pytest.toml` and `[tool.pytest]`. It runs under the interpreter the test command names where
 that can be told, and because it cannot always be told, it also works the answer
 out for each pytest generation and refuses when they would disagree.
 
 **If the configuration cannot be read** (no interpreter, pytest not importable
 from it, a syntax error, a timeout, settings that depend on the pytest version, a
 pytest 9 format under an older pytest, shell syntax or an `@file` in the pytest
-arguments), the scope is now `narrowed` with a "could not be read" signal, so the
-verdict caps at `UNPROVEN` rather than trusting a config nobody read. The signal
-gives a fixed reason and the file name; it never quotes the file's contents.
+arguments, a config file pytest would find outside the repository), the scope is
+now `narrowed` with a "could not be read" signal, so the verdict caps at
+`UNPROVEN` rather than trusting a config nobody read. The signal gives a fixed
+reason and the file name; it never quotes the file's contents.
+
+This applies whatever else the command carries. Before, a flag Refactron does not
+recognise, such as `--durations-min=0`, made the scope `unknown` and skipped both
+the configuration and the `PYTEST_ADDOPTS` checks, so a narrowed run could return
+`SAFE` (0.4.7 and earlier).
 
 **What can change for you.** The rules that judge the values are unchanged with
 one exception: `testpaths = []` is now `full`, as pytest ignores it, where it
