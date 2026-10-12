@@ -40,11 +40,16 @@ function tmp(files: Record<string, string> = {}): string {
   return root;
 }
 
-/** A stand-in interpreter: a shell script that ignores its arguments. */
-function fakePython(body: string): string {
+/**
+ * A stand-in interpreter: a shell script that ignores its arguments. Unless the
+ * body passes stdin on, it drains it first, as the real reader does; one that
+ * exits before the request is written fails with EPIPE (on Linux) and reads as
+ * an interpreter that never started.
+ */
+function fakePython(body: string, drain = true): string {
   const dir = tmp();
   const bin = path.join(dir, 'python');
-  fs.writeFileSync(bin, `#!/bin/sh\n${body}\n`);
+  fs.writeFileSync(bin, `#!/bin/sh\n${drain ? 'cat >/dev/null\n' : ''}${body}\n`);
   fs.chmodSync(bin, 0o755);
   return bin;
 }
@@ -143,7 +148,10 @@ describe('readPytestContext fails closed (#174)', () => {
   it('when the interpreter does not exist', async () => {
     const a = await scopeWith(tmp({ 'pytest.ini': '[pytest]\n' }), '/nonexistent/python3');
     expect(a.scope).toBe('narrowed');
-    expect(a.signals.join(' ')).toMatch(/could not be read.*could not be started/);
+    // Windows launches a missing binary through the shell, so the reason differs there.
+    expect(a.signals.join(' ')).toMatch(
+      WINDOWS ? /could not be read/ : /could not be read.*could not be started/,
+    );
   });
 
   it.skipIf(WINDOWS)('when the reader hangs', async () => {
@@ -180,7 +188,7 @@ describe('readPytestContext fails closed (#174)', () => {
   it.skipIf(WINDOWS || NO_PYTEST)('when pytest cannot be imported', async () => {
     const a = await scopeWith(
       tmp({ 'pytest.ini': '[pytest]\naddopts = -q\n' }),
-      fakePython('exec python3 -I -S "$@"'),
+      fakePython('exec python3 -I -S "$@"', false),
     );
     expect(a.scope).toBe('narrowed');
     expect(a.signals.join(' ')).toMatch(/could not be read.*importable/);
@@ -256,7 +264,10 @@ describe('testCommandInterpreter picks the interpreter the tests run under (#174
     ['PYTHONPATH=. python3.12 -m pytest', 'python3.12'],
     ['/opt/venv/bin/python -m pytest', '/opt/venv/bin/python'],
   ])('%s -> %s', (cmd, expected) => {
-    expect(testCommandInterpreter(cmd, '/repo')).toEqual(pinned(expected));
+    // An absolute path is resolved, which on Windows adds the drive.
+    expect(testCommandInterpreter(cmd, '/repo')).toEqual(
+      pinned(expected.includes('/') ? path.resolve('/repo', expected) : expected),
+    );
   });
 
   it.each([
