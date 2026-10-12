@@ -1,9 +1,27 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { testsGate, baselineFailReason } from '../../../src/verify/gates/tests.js';
 import { createShadowTree } from '../../../src/verify/shadow-tree.js';
+import { verificationBase } from '../../../src/verify/private-base.js';
+
+// The suites here write a marker outside their copy, so each test gets its own
+// verification base and temp dir rather than sharing the real ones.
+const ISOLATED_KEYS = ['REFACTRON_VERIFY_BASE', 'TMPDIR'] as const;
+const savedIsolated = Object.fromEntries(ISOLATED_KEYS.map((k) => [k, process.env[k]]));
+let isolatedBase = '';
+beforeEach(async () => {
+  isolatedBase = await fs.mkdtemp(path.join(await verificationBase(), 'iso-'));
+  for (const k of ISOLATED_KEYS) process.env[k] = isolatedBase;
+});
+afterEach(async () => {
+  for (const k of ISOLATED_KEYS) {
+    if (savedIsolated[k] === undefined) delete process.env[k];
+    else process.env[k] = savedIsolated[k];
+  }
+  await fs.rm(isolatedBase, { recursive: true, force: true });
+});
 
 async function fixtureWithPassingTest(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tg-'));

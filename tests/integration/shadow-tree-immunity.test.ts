@@ -20,6 +20,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { verifyDiff } from '../../src/verify/verify-diff.js';
 import { createShadowTree } from '../../src/verify/shadow-tree.js';
+import { verificationBase } from '../../src/verify/private-base.js';
 
 function pythonHasPytest(): boolean {
   try {
@@ -175,7 +176,7 @@ describe('shadow-tree containment cannot be escaped', () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'leak-src-'));
     roots.push(root);
     await fs.writeFile(path.join(root, 'secret.py'), 'SECRET = 1\n');
-    const tmp = os.tmpdir();
+    const tmp = await verificationBase();
     const before = (await fs.readdir(tmp)).filter((n) => n.startsWith('refactron-shadow-')).length;
     await expect(
       createShadowTree(root, [

@@ -1,14 +1,32 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyDiff } from '../../src/verify/verify-diff.js';
+import { verificationBase } from '../../src/verify/private-base.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.resolve(__dirname, '../fixtures/verify-diff-mini');
 const TEST_CMD = 'python3 -m pytest -q';
+
+// The suites here write a marker outside their copy, so each test gets its own
+// verification base and temp dir rather than sharing the real ones.
+const ISOLATED_KEYS = ['REFACTRON_VERIFY_BASE', 'TMPDIR'] as const;
+const savedIsolated = Object.fromEntries(ISOLATED_KEYS.map((k) => [k, process.env[k]]));
+let isolatedBase = '';
+beforeEach(async () => {
+  isolatedBase = await fs.mkdtemp(path.join(await verificationBase(), 'iso-'));
+  for (const k of ISOLATED_KEYS) process.env[k] = isolatedBase;
+});
+afterEach(async () => {
+  for (const k of ISOLATED_KEYS) {
+    if (savedIsolated[k] === undefined) delete process.env[k];
+    else process.env[k] = savedIsolated[k];
+  }
+  await fs.rm(isolatedBase, { recursive: true, force: true });
+});
 
 function pythonHasCoverage(): boolean {
   try {
