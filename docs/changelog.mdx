@@ -15,8 +15,8 @@ unabridged log lives in [`CHANGELOG.md`](https://github.com/Refactron-ai/refactr
   temp directory, and test runners read files from the directories above the one
   they run in. Another local user could place a pytest config, `conftest.py`,
   `node_modules` or `tsconfig.json` there; it ran as you and could change the
-  verdict. A single-user machine, or a temp directory only you can write to, was
-  not exposed.
+  verdict. If no other account could write to the temp directory or to any
+  directory above it, the run was not exposed.
 
   Copies are now created in a private per-user directory: the system temp
   directory, then `~/.cache/refactron`, then `~/.refactron/verify`, then

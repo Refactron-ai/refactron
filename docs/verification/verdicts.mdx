@@ -214,7 +214,7 @@ There are three ways to land here:
   a conftest.py above the verification copy could change the test run, so it was not run (found in ~)
   ```
 
-  The first names the directories tried; set `REFACTRON_VERIFY_BASE` to a directory only you can write to. The third names the file and where it was found; move it, or set `REFACTRON_VERIFY_BASE` elsewhere. No test you write moves any of these.
+  The first names the directories tried; set `REFACTRON_VERIFY_BASE` to a directory that only you can write to, with no parent writable by anyone else. The third names the file and where it was found; move it, or set `REFACTRON_VERIFY_BASE` elsewhere.
 
 `UNPROVEN` exits `0`. It is a warning, not a rejection: nothing is known to be broken, but nothing is proven either. The right response is to add the missing test, then re-run and earn `SAFE`.
 

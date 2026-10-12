@@ -23,9 +23,9 @@ local user who could write to the temp directory could place such a file above
 the copy, and the test run picked it up: their code ran as you, and it could
 change the verdict. A `SAFE` or `UNSAFE` from 0.4.7 or earlier, produced on a
 machine where another account could write to a directory above the copy, may
-have been decided by that account's files rather than your repository's. A
-single-user machine, or a temp directory only your account can write to, was
-not exposed.
+have been decided by that account's files rather than your repository's. If
+no other account could write to the temp directory or to any directory above
+it, the run was not exposed.
 
 Copies are now created in a private per-user directory, and before every
 test-runner spawn the directories above the copy are checked for files the
